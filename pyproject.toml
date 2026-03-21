@@ -1,0 +1,52 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "dbt-slack-notify"
+version = "0.0.1"
+description = "Slack notification wrapper CLI for dbt builds"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.11"
+dependencies = [
+    "click>=8.0",
+    "pydantic-settings>=2.0",
+    "slack-sdk>=3.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov",
+    "mypy>=1.0",
+    "ruff",
+    "nox",
+]
+
+[project.scripts]
+dbt-slack-notify = "dbt_slack_notify:main"
+
+[project.urls]
+Homepage = "https://github.com/dtaniwaki/dbt-slack-notify"
+Repository = "https://github.com/dtaniwaki/dbt-slack-notify"
+Issues = "https://github.com/dtaniwaki/dbt-slack-notify/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dbt_slack_notify"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["src"]
