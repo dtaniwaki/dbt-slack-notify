@@ -48,7 +48,7 @@ dbt-slack-notify --type dbt-test --label Elementary dbt test --selector elementa
 | `--log-file` | Log file path |
 | `--state-file` | State file path (default: `$TMPDIR/dbt_slack_notify_state.json`) |
 
-### Auto detection
+### Auto type detection
 
 When `--type` is `auto` (default), the notification type is detected from the command:
 
