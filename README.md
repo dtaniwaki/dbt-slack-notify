@@ -1,6 +1,12 @@
 # dbt-slack-notify
 
-Slack notification wrapper CLI for dbt builds.
+A CLI wrapper that sends Slack notifications for `dbt` builds. Wrap any `dbt run`, `dbt test`, or `dbt seed` command and get:
+
+- **Start / finish notifications** posted to a Slack channel (threaded)
+- **Result summaries** — success/error/skip counts per resource type, elapsed time
+- **Error details** — failed node names and messages (up to 5, with truncation)
+- **Model list preview** — for `dbt run`, runs `dbt ls` beforehand and uploads the list of models to be executed
+- **Auto type detection** — detects `run` / `test` / `seed` from the command, no manual `--type` needed
 
 ## Installation
 
