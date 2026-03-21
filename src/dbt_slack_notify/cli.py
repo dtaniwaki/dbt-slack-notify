@@ -15,15 +15,11 @@ from dbt_slack_notify.settings import Settings
 
 def _configure_logging(level_name: str, log_file: str | None = None) -> None:
     level = LOG_LEVELS.get(level_name.upper(), logging.INFO)
-    kwargs: dict[str, object] = {
-        "level": level,
-        "format": "%(levelname)s: %(message)s",
-    }
+    fmt = "%(levelname)s: %(message)s"
     if log_file:
-        kwargs["filename"] = log_file
+        logging.basicConfig(level=level, format=fmt, filename=log_file)
     else:
-        kwargs["stream"] = sys.stderr
-    logging.basicConfig(**kwargs)  # type: ignore[arg-type]
+        logging.basicConfig(level=level, format=fmt, stream=sys.stderr)
 
 
 @click.command(context_settings={"ignore_unknown_options": True})
@@ -80,17 +76,17 @@ def cli(
     settings = Settings()
 
     _configure_logging(
-        log_level or settings.log_level,
-        log_file=log_file or settings.log_file,
+        log_level if log_level is not None else settings.log_level,
+        log_file=log_file if log_file is not None else settings.log_file,
     )
 
     runner = SlackNotifyingRunner(
-        state_file=Path(state_file or settings.state_file),
+        state_file=Path(state_file if state_file is not None else settings.state_file),
         thread_ts=slack_thread_ts,
-        slack_token=slack_token or settings.slack_token,
-        slack_channel=slack_channel or settings.slack_channel,
-        dbt_project_dir=dbt_project_dir or settings.dbt_project_dir,
-        dbt_target_path=dbt_target_path or settings.dbt_target_path,
+        slack_token=slack_token if slack_token is not None else settings.slack_token,
+        slack_channel=slack_channel if slack_channel is not None else settings.slack_channel,
+        dbt_project_dir=dbt_project_dir if dbt_project_dir is not None else settings.dbt_project_dir,
+        dbt_target_path=dbt_target_path if dbt_target_path is not None else settings.dbt_target_path,
     )
     exit_code = runner.run(list(command), notification_type, label=label)
     sys.exit(exit_code)

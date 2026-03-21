@@ -1,6 +1,7 @@
 """Tests for dbt_slack_notify.runner."""
 
 import json
+import subprocess
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -8,7 +9,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from helpers import SAMPLE_RUN_RESULTS, write_run_results
 
-from dbt_slack_notify.runner import SlackNotifyingRunner, build_ls_command, detect_notification_type
+from dbt_slack_notify.runner import SlackNotifyingRunner, build_ls_command, detect_notification_type, get_selected_models
 
 
 class TestDetectNotificationType:
@@ -55,6 +56,36 @@ class TestBuildLsCommand:
         assert result is not None
         assert "with-role" in result
         assert "--selector" in result
+
+
+class TestGetSelectedModels:
+    @patch("dbt_slack_notify.runner.subprocess.run")
+    def test_returns_model_list(self, mock_run: MagicMock) -> None:
+        mock_run.return_value = MagicMock(returncode=0, stdout="model_a\nmodel_b\nmodel_c\n", stderr="")
+        result = get_selected_models(["dbt", "run", "--selector", "inc"])
+        assert result == ["model_a", "model_b", "model_c"]
+
+    @patch("dbt_slack_notify.runner.subprocess.run")
+    def test_empty_output(self, mock_run: MagicMock) -> None:
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        result = get_selected_models(["dbt", "run"])
+        assert result == []
+
+    @patch("dbt_slack_notify.runner.subprocess.run")
+    def test_nonzero_exit_code(self, mock_run: MagicMock) -> None:
+        mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="error")
+        result = get_selected_models(["dbt", "run"])
+        assert result is None
+
+    @patch("dbt_slack_notify.runner.subprocess.run")
+    def test_timeout_exception(self, mock_run: MagicMock) -> None:
+        mock_run.side_effect = subprocess.TimeoutExpired(cmd="dbt ls", timeout=120)
+        result = get_selected_models(["dbt", "run"])
+        assert result is None
+
+    def test_non_run_command_returns_none(self) -> None:
+        result = get_selected_models(["dbt", "test"])
+        assert result is None
 
 
 class TestSlackNotifyingRunner:

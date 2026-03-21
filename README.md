@@ -29,7 +29,7 @@ dbt-slack-notify --type dbt-test --label Elementary dbt test --selector elementa
 | `--dbt-target-path` | dbt target path (overrides env var) |
 | `--log-level` | Log level: `DEBUG`, `INFO`, `WARNING`, `ERROR` (default: `INFO`) |
 | `--log-file` | Log file path |
-| `--state-file` | State file path (default: `/tmp/slack_build_state.json`) |
+| `--state-file` | State file path (default: `$TMPDIR/dbt_slack_notify_state.json`) |
 
 ### Auto detection
 
@@ -42,7 +42,7 @@ When `--type` is `auto` (default), the notification type is detected from the co
 
 ## Environment Variables
 
-| Variable | Default | Description |
+| Variable | Fallback | Description |
 |---|---|---|
 | `DBT_SLACK_NOTIFY_SLACK_TOKEN` | `SLACK_TOKEN` | Slack API token |
 | `DBT_SLACK_NOTIFY_SLACK_CHANNEL` | `SLACK_CHANNEL` | Slack channel to post to |
@@ -53,6 +53,8 @@ When `--type` is `auto` (default), the notification type is detected from the co
 | `DBT_SLACK_NOTIFY_STATE_FILE` | `STATE_FILE` | State file path |
 
 > **Note**: In production environments, prefer environment variables over `--slack-token` CLI option to avoid token exposure in process lists.
+
+> **Note**: When using `--type dbt-run`, the tool automatically runs `dbt ls` to preview the selected models. Ephemeral models are excluded via `--exclude config.materialized:ephemeral`. If your dbt command already includes `--exclude`, the two `--exclude` flags will be combined by dbt (AND semantics), which may narrow the model list more than expected.
 
 ## License
 

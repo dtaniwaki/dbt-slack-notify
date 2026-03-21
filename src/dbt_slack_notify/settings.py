@@ -2,8 +2,15 @@
 
 from __future__ import annotations
 
+import tempfile
+from pathlib import Path
+
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings
+
+
+def _default_state_file() -> str:
+    return str(Path(tempfile.gettempdir()) / "dbt_slack_notify_state.json")
 
 
 class Settings(BaseSettings):
@@ -32,6 +39,6 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("DBT_SLACK_NOTIFY_LOG_FILE", "LOG_FILE"),
     )
     state_file: str = Field(
-        default="/tmp/slack_build_state.json",
+        default_factory=_default_state_file,
         validation_alias=AliasChoices("DBT_SLACK_NOTIFY_STATE_FILE", "STATE_FILE"),
     )

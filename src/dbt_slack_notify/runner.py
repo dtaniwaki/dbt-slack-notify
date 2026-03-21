@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from slack_sdk.errors import SlackApiError
+from slack_sdk import WebClient
 
 from dbt_slack_notify.commands import (
     cmd_dbt_run,
@@ -107,7 +107,7 @@ class SlackNotifyingRunner:
         dbt_target_path: str = "target",
         thread_ts: str | None = None,
     ) -> None:
-        self.client: Any = get_slack_client(token=slack_token)
+        self.client: WebClient | None = get_slack_client(token=slack_token)
         self.channel = slack_channel
         self.state_file = state_file
         self.dbt_project_dir = dbt_project_dir
@@ -131,8 +131,6 @@ class SlackNotifyingRunner:
             if thread_ts:
                 kwargs["thread_ts"] = thread_ts
             self.client.files_upload_v2(**kwargs)
-        except SlackApiError as e:
-            logger.warning("Failed to upload model list to Slack: %s", e)
         except Exception as e:
             logger.warning("Failed to upload model list to Slack: %s", e)
 

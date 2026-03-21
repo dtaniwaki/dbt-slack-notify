@@ -1,5 +1,8 @@
 """Tests for dbt_slack_notify.settings."""
 
+import tempfile
+from pathlib import Path
+
 import pytest
 
 from dbt_slack_notify.settings import Settings
@@ -14,7 +17,8 @@ class TestSettings:
         assert settings.dbt_target_path == "target"
         assert settings.log_level == "INFO"
         assert settings.log_file is None
-        assert settings.state_file == "/tmp/slack_build_state.json"
+        expected_state_file = str(Path(tempfile.gettempdir()) / "dbt_slack_notify_state.json")
+        assert settings.state_file == expected_state_file
 
     def test_prefixed_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("DBT_SLACK_NOTIFY_SLACK_TOKEN", "xoxb-prefixed")
