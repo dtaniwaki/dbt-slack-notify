@@ -18,15 +18,32 @@ dbt-slack-notify --type dbt-test --label Elementary dbt test --selector elementa
 
 ### Options
 
+**Notification**
+
 | Option | Description |
 |---|---|
 | `--type` | Notification type: `dbt-seed`, `dbt-run`, `dbt-test`, `auto` (default: `auto`) |
 | `--label` | Label appended to notification title (e.g. `Elementary` -> `dbt test (Elementary)`) |
-| `--slack-thread-ts` | Existing Slack thread timestamp to reply to |
+
+**Slack**
+
+| Option | Description |
+|---|---|
 | `--slack-token` | Slack API token (overrides env var) |
 | `--slack-channel` | Slack channel (overrides env var) |
+| `--slack-thread-ts` | Existing Slack thread timestamp to reply to |
+
+**dbt**
+
+| Option | Description |
+|---|---|
 | `--dbt-project-dir` | dbt project directory (overrides env var) |
 | `--dbt-target-path` | dbt target path (overrides env var) |
+
+**General**
+
+| Option | Description |
+|---|---|
 | `--log-level` | Log level: `DEBUG`, `INFO`, `WARNING`, `ERROR` (default: `INFO`) |
 | `--log-file` | Log file path |
 | `--state-file` | State file path (default: `$TMPDIR/dbt_slack_notify_state.json`) |
@@ -42,12 +59,24 @@ When `--type` is `auto` (default), the notification type is detected from the co
 
 ## Environment Variables
 
+**Slack**
+
 | Variable | Fallback | Description |
 |---|---|---|
 | `DBT_SLACK_NOTIFY_SLACK_TOKEN` | `SLACK_TOKEN` | Slack API token |
 | `DBT_SLACK_NOTIFY_SLACK_CHANNEL` | `SLACK_CHANNEL` | Slack channel to post to |
+
+**dbt**
+
+| Variable | Fallback | Description |
+|---|---|---|
 | `DBT_SLACK_NOTIFY_DBT_PROJECT_DIR` | `DBT_PROJECT_DIR` | dbt project directory |
 | `DBT_SLACK_NOTIFY_DBT_TARGET_PATH` | `DBT_TARGET_PATH` | dbt target path |
+
+**General**
+
+| Variable | Fallback | Description |
+|---|---|---|
 | `DBT_SLACK_NOTIFY_LOG_LEVEL` | `LOG_LEVEL` | Log level (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
 | `DBT_SLACK_NOTIFY_LOG_FILE` | `LOG_FILE` | Log file path |
 | `DBT_SLACK_NOTIFY_STATE_FILE` | `STATE_FILE` | State file path |
