@@ -91,6 +91,28 @@ When `--type` is `auto` (default), the notification type is detected from the co
 
 > **Note**: When using `--type dbt-run`, the tool automatically runs `dbt ls` to preview the selected models. Ephemeral models are excluded via `--exclude config.materialized:ephemeral`. If your dbt command already includes `--exclude`, the two `--exclude` flags will be combined by dbt (AND semantics), which may narrow the model list more than expected.
 
+## Development
+
+Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/).
+
+```bash
+uv sync
+```
+
+Run tests, linter, and type checker via [nox](https://nox.thea.codes/):
+
+```bash
+uv run nox -s test     # pytest across Python 3.11–3.13
+uv run nox -s lint      # ruff
+uv run nox -s typecheck # mypy
+```
+
+Or run tests directly:
+
+```bash
+uv run pytest tests/ -q
+```
+
 ## License
 
 MIT
