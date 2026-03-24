@@ -138,6 +138,50 @@ class TestSlackNotifyingRunner:
         assert "command_error" in state
 
     @patch("dbt_slack_notify.runner.get_slack_client")
+    def test_run_timeout_sends_timeout_notification(
+        self, mock_get_client: MagicMock, tmp_path: Path,
+    ) -> None:
+        client = MagicMock()
+        client.chat_postMessage.return_value = {"ts": "123"}
+        mock_get_client.return_value = client
+
+        state_file = tmp_path / "state.json"
+        runner = SlackNotifyingRunner(state_file=state_file, slack_channel="#test")
+        exit_code = runner.run(
+            [sys.executable, "-c", "raise SystemExit(124)"],
+            notification_type="dbt-run",
+        )
+        assert exit_code == 124
+        messages = [
+            call.kwargs.get("text", "") or call.args[0] if call.args else call.kwargs.get("text", "")
+            for call in client.chat_postMessage.call_args_list
+        ]
+        timeout_messages = [m for m in messages if "タイムアウト" in m]
+        assert len(timeout_messages) == 1
+
+    @patch("dbt_slack_notify.runner.get_slack_client")
+    def test_run_timeout_unknown_command(
+        self, mock_get_client: MagicMock, tmp_path: Path,
+    ) -> None:
+        client = MagicMock()
+        client.chat_postMessage.return_value = {"ts": "123"}
+        mock_get_client.return_value = client
+
+        state_file = tmp_path / "state.json"
+        runner = SlackNotifyingRunner(state_file=state_file, slack_channel="#test")
+        exit_code = runner.run(
+            [sys.executable, "-c", "raise SystemExit(124)"],
+            notification_type="auto",
+        )
+        assert exit_code == 124
+        messages = [
+            call.kwargs.get("text", "") or call.args[0] if call.args else call.kwargs.get("text", "")
+            for call in client.chat_postMessage.call_args_list
+        ]
+        timeout_messages = [m for m in messages if "タイムアウト" in m]
+        assert len(timeout_messages) == 1
+
+    @patch("dbt_slack_notify.runner.get_slack_client")
     def test_thread_ts_stored(
         self, mock_get_client: MagicMock, tmp_path: Path,
     ) -> None:

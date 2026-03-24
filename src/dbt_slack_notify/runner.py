@@ -24,11 +24,18 @@ from dbt_slack_notify.state import load_state, update_state
 logger = logging.getLogger(__name__)
 
 VALID_TYPES = ["dbt-seed", "dbt-run", "dbt-test", "auto"]
+TIMEOUT_EXIT_CODE = 124
 
 START_MESSAGES: dict[str, str] = {
     "dbt-seed": "dbt seed 開始",
     "dbt-run": "dbt run 開始",
     "dbt-test": "dbt test 開始",
+}
+
+TIMEOUT_MESSAGES: dict[str, str] = {
+    "dbt-seed": "dbt seed がタイムアウトしました",
+    "dbt-run": "dbt run がタイムアウトしました",
+    "dbt-test": "dbt test がタイムアウトしました",
 }
 
 _RUN_ONLY_FLAGS = frozenset({"--full-refresh", "--fail-fast", "-x"})
@@ -170,6 +177,19 @@ class SlackNotifyingRunner:
         except Exception as e:
             logger.warning("Failed to send Slack start notification: %s", e)
 
+    def _notify_timeout(self, notification_type: str | None, command: list[str], label: str | None) -> None:
+        if not self.client or not self.channel:
+            return
+        suffix = self._build_label_suffix(label)
+        try:
+            if notification_type and notification_type in TIMEOUT_MESSAGES:
+                message = TIMEOUT_MESSAGES[notification_type] + suffix
+            else:
+                message = f"コマンドがタイムアウトしました: `{' '.join(command)}`"
+            cmd_message(self.client, self.channel, self.state_file, f":alarm_clock: {message}")
+        except Exception as e:
+            logger.warning("Failed to send Slack timeout notification: %s", e)
+
     def _notify_finish(self, notification_type: str | None, command: list[str], label: str | None) -> None:
         if not self.client or not self.channel:
             return
@@ -217,6 +237,9 @@ class SlackNotifyingRunner:
             exit_code = 1
             update_state({"command_error": str(e)}, self.state_file)
 
-        self._notify_finish(detected_type, command, label)
+        if exit_code == TIMEOUT_EXIT_CODE:
+            self._notify_timeout(detected_type, command, label)
+        else:
+            self._notify_finish(detected_type, command, label)
 
         return exit_code
