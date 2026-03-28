@@ -15,18 +15,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
-      - run: uv run nox -s "test-${{ matrix.python-version }}" -- --no-header -q
+      - run: uv run --extra dev nox -s "test-${{ matrix.python-version }}" -- --no-header -q
 
   lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
-      - run: uv run nox -s lint
+      - run: uv run --extra dev nox -s lint
 
   typecheck:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
-      - run: uv run nox -s typecheck
+      - run: uv run --extra dev nox -s typecheck
