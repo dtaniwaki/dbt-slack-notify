@@ -6,10 +6,14 @@ import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
 from helpers import SAMPLE_RUN_RESULTS, write_run_results
 
-from dbt_slack_notify.runner import SlackNotifyingRunner, build_ls_command, detect_notification_type, get_selected_models
+from dbt_slack_notify.runner import (
+    SlackNotifyingRunner,
+    build_ls_command,
+    detect_notification_type,
+    get_selected_models,
+)
 
 
 class TestDetectNotificationType:
