@@ -42,11 +42,11 @@ class TestBuildStatsBlocks:
         assert "scanned 5.0 MB" in text
         assert "10s" in text
 
-    def test_bytes_scanned_zero_omitted(self) -> None:
+    def test_bytes_scanned_zero_shown(self) -> None:
         counts = {"model": {"success": 1}}
         blocks = build_stats_blocks(counts, ["model"], 10.0, title="dbt run", bytes_scanned=0)
         text = blocks[0]["text"]["text"]  # type: ignore[index]
-        assert "scanned" not in text
+        assert "scanned 0 B" in text
 
     def test_with_errors(self) -> None:
         counts = {"model": {"error": 1}}

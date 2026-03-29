@@ -42,8 +42,7 @@ def build_stats_blocks(
     meta_parts: list[str] = []
     if elapsed_time > 0:
         meta_parts.append(format_duration(elapsed_time))
-    if bytes_scanned > 0:
-        meta_parts.append(f"scanned {format_bytes(bytes_scanned)}")
+    meta_parts.append(f"scanned {format_bytes(bytes_scanned)}")
     meta = f" ({', '.join(meta_parts)})" if meta_parts else ""
     prefix = f"*{title}{meta}*\n" if title else ""
     stats_text = f"{prefix}```{table}```"
