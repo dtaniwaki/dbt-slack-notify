@@ -1,6 +1,26 @@
 """Tests for dbt_slack_notify.formatters."""
 
-from dbt_slack_notify.formatters import format_duration, format_stats_table
+from dbt_slack_notify.formatters import format_bytes, format_duration, format_stats_table
+
+
+class TestFormatBytes:
+    def test_bytes(self) -> None:
+        assert format_bytes(500) == "500 B"
+
+    def test_kilobytes(self) -> None:
+        assert format_bytes(2048) == "2.0 KB"
+
+    def test_megabytes(self) -> None:
+        assert format_bytes(5 * 1024 * 1024) == "5.0 MB"
+
+    def test_gigabytes(self) -> None:
+        assert format_bytes(int(1.5 * 1024 ** 3)) == "1.5 GB"
+
+    def test_terabytes(self) -> None:
+        assert format_bytes(2 * 1024 ** 4) == "2.0 TB"
+
+    def test_zero(self) -> None:
+        assert format_bytes(0) == "0 B"
 
 
 class TestFormatDuration:
