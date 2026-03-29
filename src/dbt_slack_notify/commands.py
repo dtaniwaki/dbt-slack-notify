@@ -28,6 +28,7 @@ def _post_stats(
     parse_error: str | None,
     text: str,
     command_error: str | None = None,
+    bytes_scanned: int = 0,
 ) -> None:
     """Post run/test stats (or parse error) to Slack."""
     if parse_error:
@@ -40,7 +41,9 @@ def _post_stats(
             {"type": "section", "text": {"type": "mrkdwn", "text": error_text}},
         ]
     else:
-        blocks = build_stats_blocks(counts, resource_types, elapsed_time, title=title, errors=errors)
+        blocks = build_stats_blocks(
+            counts, resource_types, elapsed_time, title=title, errors=errors, bytes_scanned=bytes_scanned,
+        )
 
     kwargs: dict[str, Any] = {
         "channel": channel,
@@ -93,6 +96,7 @@ def _cmd_dbt_stats(
         client, channel, thread_ts, counts, resource_types, elapsed_time,
         title, errors, parse_error, f"{title} results",
         command_error=command_error if parse_error else None,
+        bytes_scanned=bytes_scanned,
     )
     logger.info("Posted %s stats to Slack", title)
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from dbt_slack_notify.constants import MAX_ERROR_DETAILS, MAX_ERROR_MSG_LEN, ErrorEntry
-from dbt_slack_notify.formatters import format_duration, format_stats_table
+from dbt_slack_notify.formatters import format_bytes, format_duration, format_stats_table
 
 
 def build_error_details_blocks(
@@ -35,11 +35,17 @@ def build_stats_blocks(
     elapsed_time: float,
     title: str = "",
     errors: list[ErrorEntry] | None = None,
+    bytes_scanned: int = 0,
 ) -> list[dict[str, Any]]:
     """Build Slack Block Kit blocks for dbt run/test stats."""
     table = format_stats_table(counts, resource_types)
-    duration = f" ({format_duration(elapsed_time)})" if elapsed_time > 0 else ""
-    prefix = f"*{title}{duration}*\n" if title else ""
+    meta_parts: list[str] = []
+    if elapsed_time > 0:
+        meta_parts.append(format_duration(elapsed_time))
+    if bytes_scanned > 0:
+        meta_parts.append(f"scanned {format_bytes(bytes_scanned)}")
+    meta = f" ({', '.join(meta_parts)})" if meta_parts else ""
+    prefix = f"*{title}{meta}*\n" if title else ""
     stats_text = f"{prefix}```{table}```"
     blocks: list[dict[str, Any]] = [
         {"type": "section", "text": {"type": "mrkdwn", "text": stats_text}},

@@ -5,6 +5,18 @@ from __future__ import annotations
 from dbt_slack_notify.constants import STATUS_ORDER
 
 
+def format_bytes(num_bytes: int) -> str:
+    """Format bytes as human-readable size (e.g. '1.5 GB', '250 MB')."""
+    if num_bytes < 1024:
+        return f"{num_bytes} B"
+    for unit in ("KB", "MB", "GB", "TB"):
+        num_bytes_f = num_bytes / 1024
+        if num_bytes_f < 1024 or unit == "TB":
+            return f"{num_bytes_f:.1f} {unit}"
+        num_bytes = int(num_bytes_f)
+    return f"{num_bytes_f:.1f} TB"  # pragma: no cover
+
+
 def format_duration(seconds: float) -> str:
     """Format seconds as human-readable duration (e.g. '4m 32s')."""
     total = int(seconds)
