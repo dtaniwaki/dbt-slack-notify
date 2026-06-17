@@ -11,9 +11,11 @@ from helpers import SAMPLE_RUN_RESULTS, write_run_results
 from dbt_slack_notify.runner import (
     SlackNotifyingRunner,
     build_ls_command,
+    build_ls_command_for_build,
     detect_notification_type,
     get_selected_models,
     get_selected_nodes,
+    get_selected_nodes_by_resource_type,
 )
 
 
@@ -133,20 +135,87 @@ class TestGetSelectedNodes:
         assert result == ["test_a"]
 
 
+class TestBuildLsCommandForBuild:
+    def test_basic(self) -> None:
+        result = build_ls_command_for_build(["dbt", "build", "--selector", "inc"])
+        assert result is not None
+        assert "ls" in result
+        assert "build" not in result
+        rt_args = [result[i + 1] for i, a in enumerate(result) if a == "--resource-type"]
+        assert rt_args == ["seed", "model", "test"]
+        assert "--output" in result
+        assert result[result.index("--output") + 1] == "json"
+        exclude_idx = result.index("--exclude")
+        assert result[exclude_idx + 1] == "config.materialized:ephemeral"
+        assert "--selector" in result
+
+    def test_strips_run_only_flags(self) -> None:
+        result = build_ls_command_for_build(["dbt", "build", "--full-refresh"])
+        assert result is not None
+        assert "--full-refresh" not in result
+
+    def test_non_build_returns_none(self) -> None:
+        assert build_ls_command_for_build(["dbt", "run"]) is None
+        assert build_ls_command_for_build(["dbt", "test"]) is None
+
+
+class TestGetSelectedNodesByResourceType:
+    @patch("dbt_slack_notify.runner.subprocess.run")
+    def test_groups_by_resource_type(self, mock_run: MagicMock) -> None:
+        stdout = "\n".join([
+            json.dumps({"unique_id": "seed.pkg.seed_a", "resource_type": "seed"}),
+            json.dumps({"unique_id": "model.pkg.model_a", "resource_type": "model"}),
+            json.dumps({"unique_id": "model.pkg.model_b", "resource_type": "model"}),
+            json.dumps({"unique_id": "test.pkg.test_a", "resource_type": "test"}),
+        ])
+        mock_run.return_value = MagicMock(returncode=0, stdout=stdout, stderr="")
+        result = get_selected_nodes_by_resource_type(["dbt", "build", "--selector", "inc"])
+        assert result == {
+            "seed": ["seed.pkg.seed_a"],
+            "model": ["model.pkg.model_a", "model.pkg.model_b"],
+            "test": ["test.pkg.test_a"],
+        }
+        # Single subprocess call covers all three resource types.
+        assert mock_run.call_count == 1
+
+    @patch("dbt_slack_notify.runner.subprocess.run")
+    def test_skips_malformed_lines(self, mock_run: MagicMock) -> None:
+        stdout = "\n".join([
+            "not json",
+            json.dumps({"unique_id": "model.pkg.model_a", "resource_type": "model"}),
+        ])
+        mock_run.return_value = MagicMock(returncode=0, stdout=stdout, stderr="")
+        result = get_selected_nodes_by_resource_type(["dbt", "build"])
+        assert result == {"seed": [], "model": ["model.pkg.model_a"], "test": []}
+
+    @patch("dbt_slack_notify.runner.subprocess.run")
+    def test_nonzero_exit_code(self, mock_run: MagicMock) -> None:
+        mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="boom")
+        assert get_selected_nodes_by_resource_type(["dbt", "build"]) is None
+
+    @patch("dbt_slack_notify.runner.subprocess.run")
+    def test_timeout_exception(self, mock_run: MagicMock) -> None:
+        mock_run.side_effect = subprocess.TimeoutExpired(cmd="dbt ls", timeout=120)
+        assert get_selected_nodes_by_resource_type(["dbt", "build"]) is None
+
+    def test_non_build_returns_none(self) -> None:
+        assert get_selected_nodes_by_resource_type(["dbt", "run"]) is None
+
+
 class TestNotifyStartBuild:
     @patch("dbt_slack_notify.runner.get_slack_client")
-    @patch("dbt_slack_notify.runner.get_selected_nodes")
+    @patch("dbt_slack_notify.runner.get_selected_nodes_by_resource_type")
     def test_posts_three_messages(
-        self, mock_get_nodes: MagicMock, mock_get_client: MagicMock, tmp_path: Path,
+        self, mock_get_grouped: MagicMock, mock_get_client: MagicMock, tmp_path: Path,
     ) -> None:
         client = MagicMock()
         client.chat_postMessage.return_value = {"ts": "100"}
         mock_get_client.return_value = client
-        mock_get_nodes.side_effect = [
-            ["seed_a", "seed_b"],
-            ["model_a", "model_b", "model_c"],
-            ["test_a"],
-        ]
+        mock_get_grouped.return_value = {
+            "seed": ["seed_a", "seed_b"],
+            "model": ["model_a", "model_b", "model_c"],
+            "test": ["test_a"],
+        }
 
         state_file = tmp_path / "state.json"
         runner = SlackNotifyingRunner(state_file=state_file, slack_channel="#test")
@@ -159,20 +228,22 @@ class TestNotifyStartBuild:
         assert client.files_upload_v2.call_count == 3
         filenames = {c.kwargs["filename"] for c in client.files_upload_v2.call_args_list}
         assert filenames == {"seeds_to_build.txt", "models_to_build.txt", "tests_to_build.txt"}
+        # Grouping function is invoked once, not once per category.
+        assert mock_get_grouped.call_count == 1
 
     @patch("dbt_slack_notify.runner.get_slack_client")
-    @patch("dbt_slack_notify.runner.get_selected_nodes")
+    @patch("dbt_slack_notify.runner.get_selected_nodes_by_resource_type")
     def test_skips_empty_categories(
-        self, mock_get_nodes: MagicMock, mock_get_client: MagicMock, tmp_path: Path,
+        self, mock_get_grouped: MagicMock, mock_get_client: MagicMock, tmp_path: Path,
     ) -> None:
         client = MagicMock()
         client.chat_postMessage.return_value = {"ts": "100"}
         mock_get_client.return_value = client
-        mock_get_nodes.side_effect = [
-            [],
-            ["model_a"],
-            None,
-        ]
+        mock_get_grouped.return_value = {
+            "seed": [],
+            "model": ["model_a"],
+            "test": [],
+        }
 
         state_file = tmp_path / "state.json"
         runner = SlackNotifyingRunner(state_file=state_file, slack_channel="#test")
@@ -184,14 +255,14 @@ class TestNotifyStartBuild:
         assert client.files_upload_v2.call_count == 1
 
     @patch("dbt_slack_notify.runner.get_slack_client")
-    @patch("dbt_slack_notify.runner.get_selected_nodes")
-    def test_fallback_when_all_empty_or_failed(
-        self, mock_get_nodes: MagicMock, mock_get_client: MagicMock, tmp_path: Path,
+    @patch("dbt_slack_notify.runner.get_selected_nodes_by_resource_type")
+    def test_fallback_when_ls_failed(
+        self, mock_get_grouped: MagicMock, mock_get_client: MagicMock, tmp_path: Path,
     ) -> None:
         client = MagicMock()
         client.chat_postMessage.return_value = {"ts": "100"}
         mock_get_client.return_value = client
-        mock_get_nodes.side_effect = [None, None, None]
+        mock_get_grouped.return_value = None
 
         state_file = tmp_path / "state.json"
         runner = SlackNotifyingRunner(state_file=state_file, slack_channel="#test")
@@ -200,6 +271,25 @@ class TestNotifyStartBuild:
         messages = [c.kwargs.get("text", "") for c in client.chat_postMessage.call_args_list]
         assert len(messages) == 1
         assert "dbt build 開始 (Daily)" in messages[0]
+        client.files_upload_v2.assert_not_called()
+
+    @patch("dbt_slack_notify.runner.get_slack_client")
+    @patch("dbt_slack_notify.runner.get_selected_nodes_by_resource_type")
+    def test_fallback_when_all_categories_empty(
+        self, mock_get_grouped: MagicMock, mock_get_client: MagicMock, tmp_path: Path,
+    ) -> None:
+        client = MagicMock()
+        client.chat_postMessage.return_value = {"ts": "100"}
+        mock_get_client.return_value = client
+        mock_get_grouped.return_value = {"seed": [], "model": [], "test": []}
+
+        state_file = tmp_path / "state.json"
+        runner = SlackNotifyingRunner(state_file=state_file, slack_channel="#test")
+        runner._notify_start("dbt-build", ["dbt", "build"], label=None)
+
+        messages = [c.kwargs.get("text", "") for c in client.chat_postMessage.call_args_list]
+        assert len(messages) == 1
+        assert "dbt build 開始" in messages[0]
         client.files_upload_v2.assert_not_called()
 
 
