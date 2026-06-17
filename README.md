@@ -1,12 +1,12 @@
 # dbt-slack-notify
 
-A CLI wrapper that sends Slack notifications for `dbt` builds. Wrap any `dbt run`, `dbt test`, or `dbt seed` command and get:
+A CLI wrapper that sends Slack notifications for `dbt` builds. Wrap any `dbt run`, `dbt test`, `dbt seed`, or `dbt build` command and get:
 
 - **Start / finish notifications** posted to a Slack channel (threaded)
 - **Result summaries** — success/error/skip counts per resource type, elapsed time
 - **Error details** — failed node names and messages (up to 5, with truncation)
-- **Model list preview** — for `dbt run`, runs `dbt ls` beforehand and uploads the list of models to be executed
-- **Auto type detection** — detects `run` / `test` / `seed` from the command, no manual `--type` needed
+- **Node list preview** — for `dbt run` uploads the model list; for `dbt build` posts up to 3 start notifications (seed / model / test) each with its own `dbt ls` preview
+- **Auto type detection** — detects `run` / `test` / `seed` / `build` from the command, no manual `--type` needed
 
 ## Installation
 
@@ -28,7 +28,7 @@ dbt-slack-notify --type dbt-test --label Elementary dbt test --selector elementa
 
 | Option | Description |
 |---|---|
-| `--type` | Notification type: `dbt-seed`, `dbt-run`, `dbt-test`, `auto` (default: `auto`) |
+| `--type` | Notification type: `dbt-seed`, `dbt-run`, `dbt-test`, `dbt-build`, `auto` (default: `auto`) |
 | `--label` | Label appended to notification title (e.g. `Elementary` -> `dbt test (Elementary)`) |
 
 **Slack**
@@ -61,6 +61,7 @@ When `--type` is `auto` (default), the notification type is detected from the co
 - `dbt run ...` -> `dbt-run`
 - `dbt test ...` -> `dbt-test`
 - `dbt seed ...` -> `dbt-seed`
+- `dbt build ...` -> `dbt-build`
 - otherwise -> posts the command string as a message
 
 ## Environment Variables
@@ -89,7 +90,7 @@ When `--type` is `auto` (default), the notification type is detected from the co
 
 > **Note**: In production environments, prefer environment variables over `--slack-token` CLI option to avoid token exposure in process lists.
 
-> **Note**: When using `--type dbt-run`, the tool automatically runs `dbt ls` to preview the selected models. Ephemeral models are excluded via `--exclude config.materialized:ephemeral`. If your dbt command already includes `--exclude`, the two `--exclude` flags will be combined by dbt (AND semantics), which may narrow the model list more than expected.
+> **Note**: When using `--type dbt-run`, the tool runs `dbt ls --resource-type model` to preview the selected models. For `--type dbt-build`, it runs `dbt ls` once per resource type (`seed`, `model`, `test`) and posts one start notification per non-empty category. Ephemeral models are excluded from the model preview via `--exclude config.materialized:ephemeral`. If your dbt command already includes `--exclude`, the two `--exclude` flags will be combined by dbt (AND semantics), which may narrow the list more than expected.
 
 ## Development
 

@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 from helpers import SAMPLE_RUN_RESULTS, SAMPLE_TEST_RESULTS, write_run_results
 
 from dbt_slack_notify.commands import (
+    cmd_dbt_build,
     cmd_dbt_run,
     cmd_dbt_seed,
     cmd_dbt_test,
@@ -72,3 +73,22 @@ class TestCmdDbtTest:
         write_run_results(run_results_path, SAMPLE_TEST_RESULTS)
         cmd_dbt_test(mock_slack_client, "#test", tmp_state_file, run_results_path)
         mock_slack_client.chat_postMessage.assert_called_once()
+
+
+class TestCmdDbtBuild:
+    def test_posts_stats(
+        self, mock_slack_client: MagicMock, tmp_state_file: Path, run_results_path: Path,
+    ) -> None:
+        data = {
+            "elapsed_time": 12.0,
+            "results": [
+                {"unique_id": "model.project.users", "status": "success"},
+                {"unique_id": "seed.project.raw_users", "status": "success"},
+                {"unique_id": "test.project.not_null_users_id", "status": "pass"},
+            ],
+        }
+        write_run_results(run_results_path, data)
+        cmd_dbt_build(mock_slack_client, "#test", tmp_state_file, run_results_path)
+        mock_slack_client.chat_postMessage.assert_called_once()
+        state = load_state(tmp_state_file)
+        assert "build_stats" in state

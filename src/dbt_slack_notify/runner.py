@@ -12,6 +12,7 @@ from typing import Any
 from slack_sdk import WebClient
 
 from dbt_slack_notify.commands import (
+    cmd_dbt_build,
     cmd_dbt_run,
     cmd_dbt_seed,
     cmd_dbt_test,
@@ -23,22 +24,25 @@ from dbt_slack_notify.state import load_state, update_state
 
 logger = logging.getLogger(__name__)
 
-VALID_TYPES = ["dbt-seed", "dbt-run", "dbt-test", "auto"]
+VALID_TYPES = ["dbt-seed", "dbt-run", "dbt-test", "dbt-build", "auto"]
 TIMEOUT_EXIT_CODE = 124
 
 START_MESSAGES: dict[str, str] = {
     "dbt-seed": "dbt seed 開始",
     "dbt-run": "dbt run 開始",
     "dbt-test": "dbt test 開始",
+    "dbt-build": "dbt build 開始",
 }
 
 TIMEOUT_MESSAGES: dict[str, str] = {
     "dbt-seed": "dbt seed がタイムアウトしました",
     "dbt-run": "dbt run がタイムアウトしました",
     "dbt-test": "dbt test がタイムアウトしました",
+    "dbt-build": "dbt build がタイムアウトしました",
 }
 
 _RUN_ONLY_FLAGS = frozenset({"--full-refresh", "--fail-fast", "-x"})
+_LS_REPLACEABLE_SUBCOMMANDS = frozenset({"run", "build"})
 
 
 def detect_notification_type(command: list[str]) -> str | None:
@@ -57,18 +61,22 @@ def detect_notification_type(command: list[str]) -> str | None:
                     return "dbt-run"
                 if subcommand == "seed":
                     return "dbt-seed"
+                if subcommand == "build":
+                    return "dbt-build"
                 break
     return None
 
 
-def build_ls_command(command: list[str]) -> list[str] | None:
-    """Convert a ``dbt run`` command to ``dbt ls --output name --quiet``."""
+def build_ls_command(
+    command: list[str], resource_type: str = "model", exclude_ephemeral: bool = True,
+) -> list[str] | None:
+    """Convert a ``dbt run`` / ``dbt build`` command to ``dbt ls --output name --quiet``."""
     ls_command: list[str] = []
     replaced = False
     for i, arg in enumerate(command):
         if arg in _RUN_ONLY_FLAGS:
             continue
-        if not replaced and arg == "run":
+        if not replaced and arg in _LS_REPLACEABLE_SUBCOMMANDS:
             if any(c == "dbt" for c in command[:i]):
                 ls_command.append("ls")
                 replaced = True
@@ -76,30 +84,45 @@ def build_ls_command(command: list[str]) -> list[str] | None:
         ls_command.append(arg)
     if not replaced:
         return None
-    ls_command.extend([
-        "--resource-type", "model",
-        "--exclude", "config.materialized:ephemeral",
-        "--output", "name",
-        "--quiet",
-    ])
+    ls_command.extend(["--resource-type", resource_type])
+    if exclude_ephemeral:
+        ls_command.extend(["--exclude", "config.materialized:ephemeral"])
+    ls_command.extend(["--output", "name", "--quiet"])
     return ls_command
 
 
-def get_selected_models(command: list[str]) -> list[str] | None:
-    """Run ``dbt ls`` to preview the models that will be executed."""
-    ls_command = build_ls_command(command)
+def get_selected_nodes(
+    command: list[str], resource_type: str = "model", exclude_ephemeral: bool = True,
+) -> list[str] | None:
+    """Run ``dbt ls`` to preview nodes of the given resource type that will be executed."""
+    ls_command = build_ls_command(command, resource_type, exclude_ephemeral)
     if not ls_command:
         return None
     try:
         result = subprocess.run(ls_command, capture_output=True, text=True, timeout=120)
         if result.returncode != 0:
-            logger.warning("dbt ls failed (exit %d): %s", result.returncode, result.stderr[:500])
+            logger.warning(
+                "dbt ls (%s) failed (exit %d): %s",
+                resource_type, result.returncode, result.stderr[:500],
+            )
             return None
-        models = [line.strip() for line in result.stdout.strip().splitlines() if line.strip()]
-        return models
+        nodes = [line.strip() for line in result.stdout.strip().splitlines() if line.strip()]
+        return nodes
     except Exception as e:
-        logger.warning("Failed to get selected models: %s", e)
+        logger.warning("Failed to get selected %s nodes: %s", resource_type, e)
     return None
+
+
+def get_selected_models(command: list[str]) -> list[str] | None:
+    """Run ``dbt ls`` to preview the models that will be executed."""
+    return get_selected_nodes(command, resource_type="model", exclude_ephemeral=True)
+
+
+_BUILD_PREVIEW_CATEGORIES: list[tuple[str, str, bool]] = [
+    ("seed", "seed", False),
+    ("model", "model", True),
+    ("test", "test", False),
+]
 
 
 class SlackNotifyingRunner:
@@ -122,27 +145,50 @@ class SlackNotifyingRunner:
         if thread_ts:
             update_state({"thread_ts": thread_ts}, self.state_file)
 
-    def _upload_model_list(self, models: list[str]) -> None:
+    def _upload_node_list(self, nodes: list[str], filename: str, title: str) -> None:
         if not self.client or not self.channel:
             return
         try:
             state = load_state(self.state_file)
             thread_ts = state.get("thread_ts")
-            content = "\n".join(models)
             kwargs: dict[str, Any] = {
                 "channels": [self.channel],
-                "content": content,
-                "filename": "models_to_run.txt",
-                "title": f"実行予定モデル一覧（{len(models)}件）",
+                "content": "\n".join(nodes),
+                "filename": filename,
+                "title": title,
             }
             if thread_ts:
                 kwargs["thread_ts"] = thread_ts
             self.client.files_upload_v2(**kwargs)
         except Exception as e:
-            logger.warning("Failed to upload model list to Slack: %s", e)
+            logger.warning("Failed to upload node list (%s) to Slack: %s", filename, e)
 
     def _build_label_suffix(self, label: str | None) -> str:
         return f" ({label})" if label else ""
+
+    def _notify_start_build(self, command: list[str], suffix: str) -> None:
+        """Post one start notification per resource type (seed / model / test) for ``dbt build``."""
+        assert self.client is not None and self.channel is not None
+        posted_any = False
+        for category, resource_type, exclude_ephemeral in _BUILD_PREVIEW_CATEGORIES:
+            nodes = get_selected_nodes(command, resource_type, exclude_ephemeral)
+            if nodes is None or not nodes:
+                continue
+            cmd_message(
+                self.client, self.channel, self.state_file,
+                f"dbt build ({category}) 開始（{len(nodes)}件）{suffix}",
+            )
+            self._upload_node_list(
+                nodes,
+                f"{resource_type}s_to_build.txt",
+                f"実行予定{category}一覧（{len(nodes)}件）",
+            )
+            posted_any = True
+        if not posted_any:
+            cmd_message(
+                self.client, self.channel, self.state_file,
+                f"{START_MESSAGES['dbt-build']}{suffix}",
+            )
 
     def _notify_start(self, notification_type: str | None, command: list[str], label: str | None) -> None:
         if not self.client or not self.channel:
@@ -161,12 +207,16 @@ class SlackNotifyingRunner:
                         self.client, self.channel, self.state_file,
                         f"dbt run 開始（{len(models)}件）{suffix}",
                     )
-                    self._upload_model_list(models)
+                    self._upload_node_list(
+                        models, "models_to_run.txt", f"実行予定モデル一覧（{len(models)}件）",
+                    )
                 else:
                     cmd_message(
                         self.client, self.channel, self.state_file,
                         f"dbt run 開始（0件）{suffix}",
                     )
+            elif notification_type == "dbt-build":
+                self._notify_start_build(command, suffix)
             elif notification_type is not None:
                 cmd_message(
                     self.client, self.channel, self.state_file,
@@ -202,6 +252,8 @@ class SlackNotifyingRunner:
                 cmd_dbt_run(self.client, self.channel, self.state_file, results_path, title=f"dbt run{suffix}")
             elif notification_type == "dbt-test":
                 cmd_dbt_test(self.client, self.channel, self.state_file, results_path, title=f"dbt test{suffix}")
+            elif notification_type == "dbt-build":
+                cmd_dbt_build(self.client, self.channel, self.state_file, results_path, title=f"dbt build{suffix}")
             else:
                 cmd_message(self.client, self.channel, self.state_file, f"完了: `{' '.join(command)}`")
         except Exception as e:

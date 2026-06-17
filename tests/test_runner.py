@@ -13,6 +13,7 @@ from dbt_slack_notify.runner import (
     build_ls_command,
     detect_notification_type,
     get_selected_models,
+    get_selected_nodes,
 )
 
 
@@ -25,6 +26,9 @@ class TestDetectNotificationType:
 
     def test_dbt_seed(self) -> None:
         assert detect_notification_type(["dbt", "seed"]) == "dbt-seed"
+
+    def test_dbt_build(self) -> None:
+        assert detect_notification_type(["dbt", "build", "--selector", "inc"]) == "dbt-build"
 
     def test_dbt_with_flags(self) -> None:
         assert detect_notification_type(["dbt", "--debug", "run"]) == "dbt-run"
@@ -54,6 +58,26 @@ class TestBuildLsCommand:
 
     def test_no_dbt_run(self) -> None:
         assert build_ls_command(["dbt", "test"]) is None
+
+    def test_dbt_build(self) -> None:
+        result = build_ls_command(["dbt", "build", "--selector", "inc"])
+        assert result is not None
+        assert "ls" in result
+        assert "build" not in result
+        assert "--selector" in result
+
+    def test_resource_type_override(self) -> None:
+        result = build_ls_command(["dbt", "build"], resource_type="seed", exclude_ephemeral=False)
+        assert result is not None
+        rt_idx = result.index("--resource-type")
+        assert result[rt_idx + 1] == "seed"
+        assert "--exclude" not in result
+
+    def test_resource_type_test_no_ephemeral_exclude(self) -> None:
+        result = build_ls_command(["dbt", "build"], resource_type="test", exclude_ephemeral=False)
+        assert result is not None
+        assert "test" in result[result.index("--resource-type") + 1:result.index("--resource-type") + 2]
+        assert "--exclude" not in result
 
     def test_preserves_other_args(self) -> None:
         result = build_ls_command(["with-role", "dbt", "run", "--selector", "inc"])
@@ -90,6 +114,93 @@ class TestGetSelectedModels:
     def test_non_run_command_returns_none(self) -> None:
         result = get_selected_models(["dbt", "test"])
         assert result is None
+
+
+class TestGetSelectedNodes:
+    @patch("dbt_slack_notify.runner.subprocess.run")
+    def test_seed_resource_type(self, mock_run: MagicMock) -> None:
+        mock_run.return_value = MagicMock(returncode=0, stdout="seed_a\nseed_b\n", stderr="")
+        result = get_selected_nodes(["dbt", "build"], resource_type="seed", exclude_ephemeral=False)
+        assert result == ["seed_a", "seed_b"]
+        args = mock_run.call_args[0][0]
+        assert args[args.index("--resource-type") + 1] == "seed"
+        assert "--exclude" not in args
+
+    @patch("dbt_slack_notify.runner.subprocess.run")
+    def test_test_resource_type(self, mock_run: MagicMock) -> None:
+        mock_run.return_value = MagicMock(returncode=0, stdout="test_a\n", stderr="")
+        result = get_selected_nodes(["dbt", "build"], resource_type="test", exclude_ephemeral=False)
+        assert result == ["test_a"]
+
+
+class TestNotifyStartBuild:
+    @patch("dbt_slack_notify.runner.get_slack_client")
+    @patch("dbt_slack_notify.runner.get_selected_nodes")
+    def test_posts_three_messages(
+        self, mock_get_nodes: MagicMock, mock_get_client: MagicMock, tmp_path: Path,
+    ) -> None:
+        client = MagicMock()
+        client.chat_postMessage.return_value = {"ts": "100"}
+        mock_get_client.return_value = client
+        mock_get_nodes.side_effect = [
+            ["seed_a", "seed_b"],
+            ["model_a", "model_b", "model_c"],
+            ["test_a"],
+        ]
+
+        state_file = tmp_path / "state.json"
+        runner = SlackNotifyingRunner(state_file=state_file, slack_channel="#test")
+        runner._notify_start("dbt-build", ["dbt", "build", "--selector", "daily"], label=None)
+
+        messages = [c.kwargs.get("text", "") for c in client.chat_postMessage.call_args_list]
+        assert any("dbt build (seed) 開始（2件）" in m for m in messages)
+        assert any("dbt build (model) 開始（3件）" in m for m in messages)
+        assert any("dbt build (test) 開始（1件）" in m for m in messages)
+        assert client.files_upload_v2.call_count == 3
+        filenames = {c.kwargs["filename"] for c in client.files_upload_v2.call_args_list}
+        assert filenames == {"seeds_to_build.txt", "models_to_build.txt", "tests_to_build.txt"}
+
+    @patch("dbt_slack_notify.runner.get_slack_client")
+    @patch("dbt_slack_notify.runner.get_selected_nodes")
+    def test_skips_empty_categories(
+        self, mock_get_nodes: MagicMock, mock_get_client: MagicMock, tmp_path: Path,
+    ) -> None:
+        client = MagicMock()
+        client.chat_postMessage.return_value = {"ts": "100"}
+        mock_get_client.return_value = client
+        mock_get_nodes.side_effect = [
+            [],
+            ["model_a"],
+            None,
+        ]
+
+        state_file = tmp_path / "state.json"
+        runner = SlackNotifyingRunner(state_file=state_file, slack_channel="#test")
+        runner._notify_start("dbt-build", ["dbt", "build"], label=None)
+
+        messages = [c.kwargs.get("text", "") for c in client.chat_postMessage.call_args_list]
+        assert len(messages) == 1
+        assert "dbt build (model) 開始（1件）" in messages[0]
+        assert client.files_upload_v2.call_count == 1
+
+    @patch("dbt_slack_notify.runner.get_slack_client")
+    @patch("dbt_slack_notify.runner.get_selected_nodes")
+    def test_fallback_when_all_empty_or_failed(
+        self, mock_get_nodes: MagicMock, mock_get_client: MagicMock, tmp_path: Path,
+    ) -> None:
+        client = MagicMock()
+        client.chat_postMessage.return_value = {"ts": "100"}
+        mock_get_client.return_value = client
+        mock_get_nodes.side_effect = [None, None, None]
+
+        state_file = tmp_path / "state.json"
+        runner = SlackNotifyingRunner(state_file=state_file, slack_channel="#test")
+        runner._notify_start("dbt-build", ["dbt", "build"], label="Daily")
+
+        messages = [c.kwargs.get("text", "") for c in client.chat_postMessage.call_args_list]
+        assert len(messages) == 1
+        assert "dbt build 開始 (Daily)" in messages[0]
+        client.files_upload_v2.assert_not_called()
 
 
 class TestSlackNotifyingRunner:

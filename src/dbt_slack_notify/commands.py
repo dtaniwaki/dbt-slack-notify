@@ -120,3 +120,13 @@ def cmd_dbt_test(
 ) -> None:
     """Post dbt test stats as thread reply."""
     _cmd_dbt_stats(client, channel, state_file, results_path, title, "test_stats", ["test", "unit_test"])
+
+
+def cmd_dbt_build(
+    client: WebClient, channel: str, state_file: Path, results_path: Path, title: str = "dbt build",
+) -> None:
+    """Post dbt build stats as thread reply."""
+    _cmd_dbt_stats(
+        client, channel, state_file, results_path, title, "build_stats",
+        ["model", "seed", "snapshot", "test", "unit_test"],
+    )
