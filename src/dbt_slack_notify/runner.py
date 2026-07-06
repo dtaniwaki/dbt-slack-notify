@@ -6,10 +6,12 @@ import collections
 import json
 import logging
 import os
+import re
 import signal
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +33,7 @@ logger = logging.getLogger(__name__)
 VALID_TYPES = ["dbt-seed", "dbt-run", "dbt-test", "dbt-build", "auto"]
 TIMEOUT_EXIT_CODE = 124
 DEFAULT_KILL_GRACE = 300
+DEFAULT_PROGRESS_MIN_INTERVAL = 600
 
 _DURATION_UNITS = {"s": 1, "m": 60, "h": 3600}
 
@@ -65,6 +68,13 @@ TIMEOUT_MESSAGES: dict[str, str] = {
     "dbt-run": "dbt run がタイムアウトしました",
     "dbt-test": "dbt test がタイムアウトしました",
     "dbt-build": "dbt build がタイムアウトしました",
+}
+
+TYPE_LABELS: dict[str, str] = {
+    "dbt-seed": "dbt seed",
+    "dbt-run": "dbt run",
+    "dbt-test": "dbt test",
+    "dbt-build": "dbt build",
 }
 
 _RUN_ONLY_FLAGS = frozenset({"--full-refresh", "--fail-fast", "-x"})
@@ -216,6 +226,72 @@ def get_selected_nodes_by_resource_type(command: list[str]) -> dict[str, list[st
     return grouped
 
 
+class ProgressTracker:
+    """Parses dbt's ``N of M`` streaming output and emits progress updates at gated intervals.
+
+    An update is emitted only when every enabled gate has been cleared since the previous
+    update: at least ``step_percent`` more of the run is complete, at least ``min_nodes`` nodes
+    have finished, and at least ``min_interval`` seconds have elapsed. ``min_nodes`` prevents
+    per-node spam on tiny runs; ``min_interval`` throttles fast runs.
+    """
+
+    _LINE_RE = re.compile(r"\b(\d+) of (\d+) ([A-Z][A-Z-]*)\b")
+    _ERROR_STATUSES = frozenset({"ERROR", "FAIL"})
+
+    def __init__(
+        self,
+        step_percent: int,
+        min_nodes: int | None = None,
+        min_interval: float | None = None,
+        clock: Any = None,
+    ) -> None:
+        self.step_percent = step_percent
+        self.min_nodes = min_nodes
+        self.min_interval = min_interval
+        self._clock = clock if clock is not None else time.monotonic
+        self.total = 0
+        self.completed = 0
+        self.errors = 0
+        self.warns = 0
+        self._last_percent = 0
+        self._last_completed = 0
+        self._last_time = self._clock()
+
+    def feed(self, line: str) -> dict[str, int] | None:
+        match = self._LINE_RE.search(line)
+        if not match:
+            return None
+        _index, total_str, status = match.groups()
+        self.total = max(self.total, int(total_str))
+        if status == "START":
+            return None
+        self.completed += 1
+        if status in self._ERROR_STATUSES:
+            self.errors += 1
+        elif status == "WARN":
+            self.warns += 1
+        if self.total <= 0:
+            return None
+        percent = self.completed * 100 // self.total
+        if percent - self._last_percent < self.step_percent:
+            return None
+        if self.min_nodes is not None and self.completed - self._last_completed < self.min_nodes:
+            return None
+        now = self._clock()
+        if self.min_interval is not None and now - self._last_time < self.min_interval:
+            return None
+        self._last_percent = percent
+        self._last_completed = self.completed
+        self._last_time = now
+        return {
+            "completed": self.completed,
+            "total": self.total,
+            "percent": percent,
+            "errors": self.errors,
+            "warns": self.warns,
+        }
+
+
 class SlackNotifyingRunner:
     """Runs a command while sending Slack notifications before and after execution."""
 
@@ -359,12 +435,37 @@ class SlackNotifyingRunner:
             return
         self._notify_finish(notification_type, command, label)
 
-    @staticmethod
-    def _drain_stdout(stream: Any, tail_lines: collections.deque[str]) -> None:
+    def _notify_progress(
+        self, notification_type: str | None, label: str | None, update: dict[str, int],
+    ) -> None:
+        if not self.client or not self.channel:
+            return
+        base = TYPE_LABELS.get(notification_type or "", "実行")
+        text = f"{base} 進捗: {update['completed']}/{update['total']}件 ({update['percent']}%)"
+        if update["errors"]:
+            text += f" — :warning: エラー{update['errors']}件"
+        text += self._build_label_suffix(label)
+        try:
+            cmd_message(self.client, self.channel, self.state_file, text)
+        except Exception as e:
+            logger.warning("Failed to send Slack progress notification: %s", e)
+
+    def _drain_stdout(
+        self,
+        stream: Any,
+        tail_lines: collections.deque[str],
+        tracker: ProgressTracker | None = None,
+        notification_type: str | None = None,
+        label: str | None = None,
+    ) -> None:
         for line in stream:
             sys.stdout.write(line)
             sys.stdout.flush()
             tail_lines.append(line)
+            if tracker is not None:
+                update = tracker.feed(line)
+                if update is not None:
+                    self._notify_progress(notification_type, label, update)
 
     @staticmethod
     def _signal_group(proc: subprocess.Popen[str], sig: int) -> bool:
@@ -397,12 +498,21 @@ class SlackNotifyingRunner:
         label: str | None = None,
         timeout: float | None = None,
         kill_grace: float = DEFAULT_KILL_GRACE,
+        progress_step: int | None = None,
+        progress_min_nodes: int | None = None,
+        progress_min_interval: float | None = None,
     ) -> int:
         """Execute command with Slack notifications. Returns the exit code."""
         detected_type = notification_type if notification_type != "auto" else detect_notification_type(command)
         update_state({"command_error": None}, self.state_file)
 
         self._notify_start(detected_type, command, label)
+
+        tracker = (
+            ProgressTracker(progress_step, progress_min_nodes, progress_min_interval)
+            if progress_step and self.client and self.channel
+            else None
+        )
 
         exit_code = 0
         timed_out = False
@@ -417,7 +527,10 @@ class SlackNotifyingRunner:
                 start_new_session=timeout is not None,
             )
             assert proc.stdout is not None
-            reader = threading.Thread(target=self._drain_stdout, args=(proc.stdout, tail_lines))
+            reader = threading.Thread(
+                target=self._drain_stdout,
+                args=(proc.stdout, tail_lines, tracker, detected_type, label),
+            )
             reader.start()
             try:
                 proc.wait(timeout=timeout)

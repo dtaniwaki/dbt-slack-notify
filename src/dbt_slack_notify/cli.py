@@ -11,6 +11,7 @@ import click
 from dbt_slack_notify.constants import LOG_LEVELS
 from dbt_slack_notify.runner import (
     DEFAULT_KILL_GRACE,
+    DEFAULT_PROGRESS_MIN_INTERVAL,
     VALID_TYPES,
     SlackNotifyingRunner,
     parse_duration,
@@ -68,6 +69,26 @@ def _configure_logging(level_name: str, log_file: str | None = None) -> None:
     default=None,
     help=f"Seconds to wait after SIGINT before SIGKILL (e.g. 300, 5m). Default: {DEFAULT_KILL_GRACE}.",
 )
+@click.option(
+    "--progress-step",
+    default=None,
+    type=int,
+    help="Post a progress update to the thread each time this many percent more of the run "
+    "completes (parsed from dbt's 'N of M' output). Disabled if unset.",
+)
+@click.option(
+    "--progress-min-nodes",
+    default=None,
+    type=int,
+    help="Suppress a progress update unless at least this many nodes finished since the last one. "
+    "Avoids per-node spam on small runs.",
+)
+@click.option(
+    "--progress-min-interval",
+    default=None,
+    help="Suppress a progress update unless at least this long elapsed since the last one "
+    f"(e.g. 60s, 2m). Throttles fast runs. Default: {DEFAULT_PROGRESS_MIN_INTERVAL}s (when --progress-step is set).",
+)
 @click.argument("command", nargs=-1, required=True)
 def cli(
     notification_type: str,
@@ -83,6 +104,9 @@ def cli(
     state_file: str | None,
     timeout: str | None,
     kill_grace: str | None,
+    progress_step: int | None,
+    progress_min_nodes: int | None,
+    progress_min_interval: str | None,
 ) -> None:
     """Run a command with automatic Slack notifications.
 
@@ -101,6 +125,26 @@ def cli(
         kill_grace_seconds = parse_duration(kill_grace) if kill_grace else DEFAULT_KILL_GRACE
     except ValueError as e:
         raise click.BadParameter(str(e), param_hint="--kill-grace") from e
+
+    progress_step_value = progress_step if progress_step is not None else settings.progress_step
+    if progress_step_value is not None and not 1 <= progress_step_value <= 100:
+        raise click.BadParameter("must be between 1 and 100", param_hint="--progress-step")
+    progress_min_nodes_value = (
+        progress_min_nodes if progress_min_nodes is not None else settings.progress_min_nodes
+    )
+    if progress_min_nodes_value is not None and progress_min_nodes_value < 1:
+        raise click.BadParameter("must be a positive integer", param_hint="--progress-min-nodes")
+    progress_min_interval_raw = (
+        progress_min_interval if progress_min_interval is not None else settings.progress_min_interval
+    )
+    try:
+        progress_min_interval_seconds = (
+            parse_duration(progress_min_interval_raw) if progress_min_interval_raw else None
+        )
+    except ValueError as e:
+        raise click.BadParameter(str(e), param_hint="--progress-min-interval") from e
+    if progress_step_value is not None and progress_min_interval_seconds is None:
+        progress_min_interval_seconds = DEFAULT_PROGRESS_MIN_INTERVAL
 
     _configure_logging(
         log_level if log_level is not None else settings.log_level,
@@ -121,5 +165,8 @@ def cli(
         label=label,
         timeout=timeout_seconds,
         kill_grace=kill_grace_seconds,
+        progress_step=progress_step_value,
+        progress_min_nodes=progress_min_nodes_value,
+        progress_min_interval=progress_min_interval_seconds,
     )
     sys.exit(exit_code)

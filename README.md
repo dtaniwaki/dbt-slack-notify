@@ -32,6 +32,9 @@ dbt-slack-notify --type dbt-test --label Elementary dbt test --selector elementa
 | `--label` | Label appended to notification title (e.g. `Elementary` -> `dbt test (Elementary)`) |
 | `--timeout` | Timeout for the wrapped command (e.g. `240m`, `4h`, `3600`). On timeout the child is sent `SIGINT` then `SIGKILL` after `--kill-grace` |
 | `--kill-grace` | Seconds to wait after `SIGINT` before `SIGKILL` (e.g. `300`, `5m`, default: `300`) |
+| `--progress-step` | Post a progress update to the thread each time this many percent more of the run completes, parsed from dbt's `N of M` output (e.g. `10`). Disabled if unset |
+| `--progress-min-nodes` | Suppress a progress update unless at least this many nodes finished since the last one. Avoids per-node spam on small runs |
+| `--progress-min-interval` | Suppress a progress update unless at least this long elapsed since the last one (e.g. `60s`, `2m`). Throttles fast runs |
 
 **Slack**
 
@@ -76,6 +79,21 @@ dbt-slack-notify --timeout 240m dbt build --selector daily
 
 On timeout the tool sends `SIGINT` to the command's process group (not `SIGTERM`), so dbt shuts down gracefully and flushes `run_results.json` for the nodes that finished — enabling a follow-up re-run of only the unfinished nodes. If the process is still alive after `--kill-grace` seconds it is force-killed with `SIGKILL`. When a timeout occurs the tool posts the timeout alarm and, if `run_results.json` is present, the usual result summary. The timed-out run exits with code `124`.
 
+### Progress updates
+
+Long-running commands can feel silent between the start and finish notifications. Pass `--progress-step` to post interim updates to the same thread as the run progresses:
+
+```bash
+dbt-slack-notify --progress-step 10 dbt build --selector daily
+```
+
+The tool parses dbt's `N of M` streaming output and posts a compact reply each time another `--progress-step` percent of the run completes (e.g. `dbt run 進捗: 120/200件 (60%) — :warning: エラー2件`). Because the trigger is percent-based, the number of updates is capped at `100 / step` regardless of how many nodes run.
+
+Two gates suppress noise on small or fast runs; an update is posted only after every gate has cleared since the previous one (the interval is measured from the run start, so nothing posts during the first window):
+
+- `--progress-min-nodes N` — require at least `N` nodes to finish between updates. On a run smaller than `N`, no interim updates are posted at all (only start and finish).
+- `--progress-min-interval DURATION` — require at least `DURATION` (e.g. `60s`, `2m`) between updates. **Defaults to `600s` (10 min) when `--progress-step` is set**, so short runs stay quiet; pass a smaller value to loosen it.
+
 ## Environment Variables
 
 **Slack**
@@ -99,6 +117,9 @@ On timeout the tool sends `SIGINT` to the command's process group (not `SIGTERM`
 | `DBT_SLACK_NOTIFY_LOG_LEVEL` | `LOG_LEVEL` | Log level (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
 | `DBT_SLACK_NOTIFY_LOG_FILE` | `LOG_FILE` | Log file path |
 | `DBT_SLACK_NOTIFY_STATE_FILE` | `STATE_FILE` | State file path |
+| `DBT_SLACK_NOTIFY_PROGRESS_STEP` | `PROGRESS_STEP` | Percent step for progress updates (see `--progress-step`) |
+| `DBT_SLACK_NOTIFY_PROGRESS_MIN_NODES` | `PROGRESS_MIN_NODES` | Minimum nodes between progress updates |
+| `DBT_SLACK_NOTIFY_PROGRESS_MIN_INTERVAL` | `PROGRESS_MIN_INTERVAL` | Minimum time between progress updates (e.g. `60s`) |
 
 > **Note**: In production environments, prefer environment variables over `--slack-token` CLI option to avoid token exposure in process lists.
 

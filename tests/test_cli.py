@@ -130,3 +130,80 @@ class TestCliTimeout:
         runner = CliRunner()
         result = runner.invoke(cli, ["--timeout", "abc", "echo", "hi"])
         assert result.exit_code != 0
+
+
+class TestCliProgress:
+    @patch("dbt_slack_notify.cli.SlackNotifyingRunner")
+    def test_progress_options_passed_through(self, mock_runner_cls: pytest.fixture) -> None:
+        mock_runner = mock_runner_cls.return_value
+        mock_runner.run.return_value = 0
+
+        runner = CliRunner()
+        result = runner.invoke(cli, [
+            "--progress-step", "10",
+            "--progress-min-nodes", "5",
+            "--progress-min-interval", "2m",
+            "echo", "hi",
+        ])
+        assert result.exit_code == 0
+        run_kwargs = mock_runner.run.call_args[1]
+        assert run_kwargs["progress_step"] == 10
+        assert run_kwargs["progress_min_nodes"] == 5
+        assert run_kwargs["progress_min_interval"] == 120
+
+    @patch("dbt_slack_notify.cli.SlackNotifyingRunner")
+    def test_progress_defaults_none(self, mock_runner_cls: pytest.fixture) -> None:
+        mock_runner = mock_runner_cls.return_value
+        mock_runner.run.return_value = 0
+
+        runner = CliRunner()
+        result = runner.invoke(cli, ["echo", "hi"])
+        assert result.exit_code == 0
+        run_kwargs = mock_runner.run.call_args[1]
+        assert run_kwargs["progress_step"] is None
+        assert run_kwargs["progress_min_nodes"] is None
+        assert run_kwargs["progress_min_interval"] is None
+
+    @patch("dbt_slack_notify.cli.SlackNotifyingRunner")
+    def test_progress_step_defaults_min_interval_to_10min(
+        self, mock_runner_cls: pytest.fixture,
+    ) -> None:
+        mock_runner = mock_runner_cls.return_value
+        mock_runner.run.return_value = 0
+
+        runner = CliRunner()
+        result = runner.invoke(cli, ["--progress-step", "10", "echo", "hi"])
+        assert result.exit_code == 0
+        run_kwargs = mock_runner.run.call_args[1]
+        assert run_kwargs["progress_min_interval"] == 600
+
+    @patch("dbt_slack_notify.cli.SlackNotifyingRunner")
+    def test_progress_step_from_env(
+        self, mock_runner_cls: pytest.fixture, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("DBT_SLACK_NOTIFY_PROGRESS_STEP", "20")
+        mock_runner = mock_runner_cls.return_value
+        mock_runner.run.return_value = 0
+
+        runner = CliRunner()
+        result = runner.invoke(cli, ["echo", "hi"])
+        assert result.exit_code == 0
+        run_kwargs = mock_runner.run.call_args[1]
+        assert run_kwargs["progress_step"] == 20
+
+    def test_progress_step_out_of_range(self) -> None:
+        runner = CliRunner()
+        result = runner.invoke(cli, ["--progress-step", "0", "echo", "hi"])
+        assert result.exit_code != 0
+        result = runner.invoke(cli, ["--progress-step", "101", "echo", "hi"])
+        assert result.exit_code != 0
+
+    def test_progress_min_nodes_non_positive(self) -> None:
+        runner = CliRunner()
+        result = runner.invoke(cli, ["--progress-min-nodes", "0", "echo", "hi"])
+        assert result.exit_code != 0
+
+    def test_invalid_progress_min_interval(self) -> None:
+        runner = CliRunner()
+        result = runner.invoke(cli, ["--progress-min-interval", "abc", "echo", "hi"])
+        assert result.exit_code != 0

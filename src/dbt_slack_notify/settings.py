@@ -42,3 +42,15 @@ class Settings(BaseSettings):
         default_factory=_default_state_file,
         validation_alias=AliasChoices("DBT_SLACK_NOTIFY_STATE_FILE", "STATE_FILE"),
     )
+    progress_step: int | None = Field(
+        default=None,
+        validation_alias=AliasChoices("DBT_SLACK_NOTIFY_PROGRESS_STEP", "PROGRESS_STEP"),
+    )
+    progress_min_nodes: int | None = Field(
+        default=None,
+        validation_alias=AliasChoices("DBT_SLACK_NOTIFY_PROGRESS_MIN_NODES", "PROGRESS_MIN_NODES"),
+    )
+    progress_min_interval: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("DBT_SLACK_NOTIFY_PROGRESS_MIN_INTERVAL", "PROGRESS_MIN_INTERVAL"),
+    )

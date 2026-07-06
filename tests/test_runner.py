@@ -10,6 +10,7 @@ import pytest
 from helpers import SAMPLE_RUN_RESULTS, write_run_results
 
 from dbt_slack_notify.runner import (
+    ProgressTracker,
     SlackNotifyingRunner,
     build_ls_command,
     build_ls_command_for_build,
@@ -19,6 +20,10 @@ from dbt_slack_notify.runner import (
     get_selected_nodes_by_resource_type,
     parse_duration,
 )
+
+
+def _dbt_line(index: int, total: int, status: str = "OK") -> str:
+    return f"12:00:00  {index} of {total} {status} created model schema.node_{index} [SELECT in 1s]"
 
 
 class TestParseDuration:
@@ -327,6 +332,64 @@ class TestNotifyStartBuild:
         client.files_upload_v2.assert_not_called()
 
 
+class TestProgressTracker:
+    def test_emits_every_step_percent(self) -> None:
+        tracker = ProgressTracker(step_percent=25)
+        updates = [tracker.feed(_dbt_line(i, 100)) for i in range(1, 101)]
+        posted = [u for u in updates if u is not None]
+        percents = [u["percent"] for u in posted]
+        assert percents == [25, 50, 75, 100]
+        assert posted[-1]["completed"] == 100
+
+    def test_ignores_start_lines(self) -> None:
+        tracker = ProgressTracker(step_percent=10)
+        assert tracker.feed(_dbt_line(1, 10, status="START")) is None
+        assert tracker.completed == 0
+        assert tracker.total == 10
+
+    def test_ignores_non_progress_lines(self) -> None:
+        tracker = ProgressTracker(step_percent=10)
+        assert tracker.feed("12:00:00  Running with dbt=1.8.0") is None
+        assert tracker.feed("12:00:00  Done. PASS=10 WARN=0 ERROR=0") is None
+        assert tracker.completed == 0
+
+    def test_counts_errors_and_warns(self) -> None:
+        tracker = ProgressTracker(step_percent=25)
+        tracker.feed(_dbt_line(1, 4, status="ERROR"))
+        tracker.feed(_dbt_line(2, 4, status="FAIL"))
+        tracker.feed(_dbt_line(3, 4, status="WARN"))
+        update = tracker.feed(_dbt_line(4, 4, status="OK"))
+        assert update is not None
+        assert update["errors"] == 2
+        assert update["warns"] == 1
+
+    def test_min_nodes_suppresses_tiny_run(self) -> None:
+        tracker = ProgressTracker(step_percent=10, min_nodes=5)
+        updates = [tracker.feed(_dbt_line(i, 3)) for i in range(1, 4)]
+        assert all(u is None for u in updates)
+
+    def test_min_nodes_allows_once_threshold_met(self) -> None:
+        tracker = ProgressTracker(step_percent=1, min_nodes=5)
+        updates = [tracker.feed(_dbt_line(i, 100)) for i in range(1, 11)]
+        posted = [u for u in updates if u is not None]
+        assert [u["completed"] for u in posted] == [5, 10]
+
+    def test_min_interval_throttles(self) -> None:
+        clock = {"t": 0.0}
+        tracker = ProgressTracker(step_percent=1, min_interval=60, clock=lambda: clock["t"])
+        assert tracker.feed(_dbt_line(1, 100)) is None
+        clock["t"] = 30
+        assert tracker.feed(_dbt_line(2, 100)) is None
+        clock["t"] = 61
+        second = tracker.feed(_dbt_line(3, 100))
+        assert second is not None
+        assert second["completed"] == 3
+        clock["t"] = 90
+        assert tracker.feed(_dbt_line(4, 100)) is None
+        clock["t"] = 130
+        assert tracker.feed(_dbt_line(5, 100)) is not None
+
+
 class TestSlackNotifyingRunner:
     @patch("dbt_slack_notify.runner.get_slack_client")
     def test_run_success(
@@ -351,6 +414,36 @@ class TestSlackNotifyingRunner:
         exit_code = runner.run([sys.executable, "-c", "print('ok')"], notification_type="dbt-run")
         assert exit_code == 0
         assert client.chat_postMessage.call_count >= 2
+
+    @patch("dbt_slack_notify.runner.get_slack_client")
+    def test_run_posts_progress_updates(
+        self, mock_get_client: MagicMock, tmp_path: Path, run_results_path: Path,
+    ) -> None:
+        client = MagicMock()
+        client.chat_postMessage.return_value = {"ts": "123"}
+        mock_get_client.return_value = client
+
+        write_run_results(tmp_path / "run_results.json", SAMPLE_RUN_RESULTS)
+
+        script = (
+            "for i in range(1, 5):\n"
+            "    print(f'12:00:0{i}  {i} of 4 OK created model schema.node_{i} [SELECT in 1s]', flush=True)\n"
+        )
+        state_file = tmp_path / "state.json"
+        runner = SlackNotifyingRunner(
+            state_file=state_file, slack_channel="#test",
+            dbt_project_dir=str(tmp_path), dbt_target_path=".",
+        )
+        exit_code = runner.run(
+            [sys.executable, "-c", script],
+            notification_type="dbt-run",
+            progress_step=25,
+        )
+        assert exit_code == 0
+        messages = [c.kwargs.get("text", "") for c in client.chat_postMessage.call_args_list]
+        progress_messages = [m for m in messages if "進捗" in m]
+        assert len(progress_messages) == 4
+        assert "dbt run 進捗: 4/4件 (100%)" in progress_messages[-1]
 
     @patch("dbt_slack_notify.runner.get_slack_client")
     def test_run_without_slack(
