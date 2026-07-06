@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 VALID_TYPES = ["dbt-seed", "dbt-run", "dbt-test", "dbt-build", "auto"]
 TIMEOUT_EXIT_CODE = 124
 DEFAULT_KILL_GRACE = 300
-DEFAULT_PROGRESS_MIN_INTERVAL = 600
+DEFAULT_PROGRESS_MIN_INTERVAL = 300
 
 _DURATION_UNITS = {"s": 1, "m": 60, "h": 3600}
 

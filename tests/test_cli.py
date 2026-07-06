@@ -165,7 +165,7 @@ class TestCliProgress:
         assert run_kwargs["progress_min_interval"] is None
 
     @patch("dbt_slack_notify.cli.SlackNotifyingRunner")
-    def test_progress_step_defaults_min_interval_to_10min(
+    def test_progress_step_defaults_min_interval(
         self, mock_runner_cls: pytest.fixture,
     ) -> None:
         mock_runner = mock_runner_cls.return_value
@@ -175,7 +175,7 @@ class TestCliProgress:
         result = runner.invoke(cli, ["--progress-step", "10", "echo", "hi"])
         assert result.exit_code == 0
         run_kwargs = mock_runner.run.call_args[1]
-        assert run_kwargs["progress_min_interval"] == 600
+        assert run_kwargs["progress_min_interval"] == 300
 
     @patch("dbt_slack_notify.cli.SlackNotifyingRunner")
     def test_progress_step_from_env(

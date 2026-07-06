@@ -92,7 +92,7 @@ The tool parses dbt's `N of M` streaming output and posts a compact reply each t
 Two gates suppress noise on small or fast runs; an update is posted only after every gate has cleared since the previous one (the interval is measured from the run start, so nothing posts during the first window):
 
 - `--progress-min-nodes N` — require at least `N` nodes to finish between updates. On a run smaller than `N`, no interim updates are posted at all (only start and finish).
-- `--progress-min-interval DURATION` — require at least `DURATION` (e.g. `60s`, `2m`) between updates. **Defaults to `600s` (10 min) when `--progress-step` is set**, so short runs stay quiet; pass a smaller value to loosen it.
+- `--progress-min-interval DURATION` — require at least `DURATION` (e.g. `60s`, `2m`) between updates. **Defaults to `300s` (5 min) when `--progress-step` is set**, so short runs stay quiet; pass a smaller value to loosen it.
 
 ## Environment Variables
 
