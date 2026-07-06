@@ -30,6 +30,8 @@ dbt-slack-notify --type dbt-test --label Elementary dbt test --selector elementa
 |---|---|
 | `--type` | Notification type: `dbt-seed`, `dbt-run`, `dbt-test`, `dbt-build`, `auto` (default: `auto`) |
 | `--label` | Label appended to notification title (e.g. `Elementary` -> `dbt test (Elementary)`) |
+| `--timeout` | Timeout for the wrapped command (e.g. `240m`, `4h`, `3600`). On timeout the child is sent `SIGINT` then `SIGKILL` after `--kill-grace` |
+| `--kill-grace` | Seconds to wait after `SIGINT` before `SIGKILL` (e.g. `300`, `5m`, default: `300`) |
 
 **Slack**
 
@@ -63,6 +65,16 @@ When `--type` is `auto` (default), the notification type is detected from the co
 - `dbt seed ...` -> `dbt-seed`
 - `dbt build ...` -> `dbt-build`
 - otherwise -> posts the command string as a message
+
+### Timeout
+
+Use `--timeout` instead of wrapping the command with GNU `timeout`:
+
+```bash
+dbt-slack-notify --timeout 240m dbt build --selector daily
+```
+
+On timeout the tool sends `SIGINT` to the command's process group (not `SIGTERM`), so dbt shuts down gracefully and flushes `run_results.json` for the nodes that finished — enabling a follow-up re-run of only the unfinished nodes. If the process is still alive after `--kill-grace` seconds it is force-killed with `SIGKILL`. When a timeout occurs the tool posts the timeout alarm and, if `run_results.json` is present, the usual result summary. The timed-out run exits with code `124`.
 
 ## Environment Variables
 

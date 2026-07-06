@@ -9,7 +9,12 @@ from pathlib import Path
 import click
 
 from dbt_slack_notify.constants import LOG_LEVELS
-from dbt_slack_notify.runner import VALID_TYPES, SlackNotifyingRunner
+from dbt_slack_notify.runner import (
+    DEFAULT_KILL_GRACE,
+    VALID_TYPES,
+    SlackNotifyingRunner,
+    parse_duration,
+)
 from dbt_slack_notify.settings import Settings
 
 
@@ -52,6 +57,17 @@ def _configure_logging(level_name: str, log_file: str | None = None) -> None:
 )
 @click.option("--log-file", default=None, help="Log file path (overrides env var).")
 @click.option("--state-file", default=None, help="State file path (overrides env var).")
+@click.option(
+    "--timeout",
+    default=None,
+    help="Timeout for the command (e.g. 240m, 4h, 3600). On timeout the child is sent SIGINT "
+    "so dbt flushes run_results.json, then SIGKILL after --kill-grace.",
+)
+@click.option(
+    "--kill-grace",
+    default=None,
+    help=f"Seconds to wait after SIGINT before SIGKILL (e.g. 300, 5m). Default: {DEFAULT_KILL_GRACE}.",
+)
 @click.argument("command", nargs=-1, required=True)
 def cli(
     notification_type: str,
@@ -65,6 +81,8 @@ def cli(
     log_level: str | None,
     log_file: str | None,
     state_file: str | None,
+    timeout: str | None,
+    kill_grace: str | None,
 ) -> None:
     """Run a command with automatic Slack notifications.
 
@@ -74,6 +92,15 @@ def cli(
         dbt-slack-notify --type dbt-test --label Elementary dbt test --selector elementary
     """
     settings = Settings()
+
+    try:
+        timeout_seconds = parse_duration(timeout) if timeout else None
+    except ValueError as e:
+        raise click.BadParameter(str(e), param_hint="--timeout") from e
+    try:
+        kill_grace_seconds = parse_duration(kill_grace) if kill_grace else DEFAULT_KILL_GRACE
+    except ValueError as e:
+        raise click.BadParameter(str(e), param_hint="--kill-grace") from e
 
     _configure_logging(
         log_level if log_level is not None else settings.log_level,
@@ -88,5 +115,11 @@ def cli(
         dbt_project_dir=dbt_project_dir if dbt_project_dir is not None else settings.dbt_project_dir,
         dbt_target_path=dbt_target_path if dbt_target_path is not None else settings.dbt_target_path,
     )
-    exit_code = runner.run(list(command), notification_type, label=label)
+    exit_code = runner.run(
+        list(command),
+        notification_type,
+        label=label,
+        timeout=timeout_seconds,
+        kill_grace=kill_grace_seconds,
+    )
     sys.exit(exit_code)

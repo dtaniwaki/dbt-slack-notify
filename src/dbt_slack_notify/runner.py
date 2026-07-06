@@ -5,8 +5,11 @@ from __future__ import annotations
 import collections
 import json
 import logging
+import os
+import signal
 import subprocess
 import sys
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +30,28 @@ logger = logging.getLogger(__name__)
 
 VALID_TYPES = ["dbt-seed", "dbt-run", "dbt-test", "dbt-build", "auto"]
 TIMEOUT_EXIT_CODE = 124
+DEFAULT_KILL_GRACE = 300
+
+_DURATION_UNITS = {"s": 1, "m": 60, "h": 3600}
+
+
+def parse_duration(value: str) -> int:
+    """Convert a duration like ``240m`` / ``4h`` / ``3600`` to seconds."""
+    text = value.strip()
+    if not text:
+        raise ValueError("duration must not be empty")
+    unit = text[-1].lower()
+    if unit in _DURATION_UNITS:
+        number, multiplier = text[:-1], _DURATION_UNITS[unit]
+    else:
+        number, multiplier = text, 1
+    try:
+        seconds = float(number) * multiplier
+    except ValueError as e:
+        raise ValueError(f"invalid duration: {value!r}") from e
+    if seconds <= 0:
+        raise ValueError(f"duration must be positive: {value!r}")
+    return int(seconds)
 
 START_MESSAGES: dict[str, str] = {
     "dbt-seed": "dbt seed 開始",
@@ -327,7 +352,52 @@ class SlackNotifyingRunner:
         except Exception as e:
             logger.warning("Failed to send Slack finish notification: %s", e)
 
-    def run(self, command: list[str], notification_type: str = "auto", label: str | None = None) -> int:
+    def _notify_timeout_summary(self, notification_type: str | None, command: list[str], label: str | None) -> None:
+        """After a timeout, post the run_results summary if dbt flushed one before shutting down."""
+        results_path = resolve_results_path(self.dbt_project_dir, self.dbt_target_path)
+        if not results_path.exists():
+            return
+        self._notify_finish(notification_type, command, label)
+
+    @staticmethod
+    def _drain_stdout(stream: Any, tail_lines: collections.deque[str]) -> None:
+        for line in stream:
+            sys.stdout.write(line)
+            sys.stdout.flush()
+            tail_lines.append(line)
+
+    @staticmethod
+    def _signal_group(proc: subprocess.Popen[str], sig: int) -> bool:
+        try:
+            os.killpg(os.getpgid(proc.pid), sig)
+        except ProcessLookupError:
+            return False
+        return True
+
+    def _terminate_timed_out(self, proc: subprocess.Popen[str], kill_grace: float) -> None:
+        """SIGINT the process group so dbt flushes run_results, then SIGKILL if it lingers."""
+        logger.warning("Command timed out; sending SIGINT to process group (pid=%s)", proc.pid)
+        if not self._signal_group(proc, signal.SIGINT):
+            return
+        try:
+            proc.wait(timeout=kill_grace)
+            return
+        except subprocess.TimeoutExpired:
+            logger.warning("Process still running %ss after SIGINT; sending SIGKILL", kill_grace)
+        self._signal_group(proc, signal.SIGKILL)
+        try:
+            proc.wait(timeout=kill_grace)
+        except subprocess.TimeoutExpired:
+            logger.error("Process did not terminate after SIGKILL")
+
+    def run(
+        self,
+        command: list[str],
+        notification_type: str = "auto",
+        label: str | None = None,
+        timeout: float | None = None,
+        kill_grace: float = DEFAULT_KILL_GRACE,
+    ) -> int:
         """Execute command with Slack notifications. Returns the exit code."""
         detected_type = notification_type if notification_type != "auto" else detect_notification_type(command)
         update_state({"command_error": None}, self.state_file)
@@ -335,30 +405,41 @@ class SlackNotifyingRunner:
         self._notify_start(detected_type, command, label)
 
         exit_code = 0
+        timed_out = False
         tail_lines: collections.deque[str] = collections.deque(maxlen=100)
         try:
-            with subprocess.Popen(
+            proc = subprocess.Popen(
                 command,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
                 bufsize=1,
-            ) as proc:
-                assert proc.stdout is not None
-                for line in proc.stdout:
-                    sys.stdout.write(line)
-                    sys.stdout.flush()
-                    tail_lines.append(line)
-            if proc.returncode != 0:
+                start_new_session=timeout is not None,
+            )
+            assert proc.stdout is not None
+            reader = threading.Thread(target=self._drain_stdout, args=(proc.stdout, tail_lines))
+            reader.start()
+            try:
+                proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                timed_out = True
+                self._terminate_timed_out(proc, kill_grace)
+            reader.join()
+            if timed_out:
+                exit_code = TIMEOUT_EXIT_CODE
+            elif proc.returncode != 0:
                 exit_code = proc.returncode
+            if exit_code != 0:
                 command_error = "".join(tail_lines)[-2000:]
                 update_state({"command_error": command_error}, self.state_file)
         except Exception as e:
             exit_code = 1
             update_state({"command_error": str(e)}, self.state_file)
 
-        if exit_code == TIMEOUT_EXIT_CODE:
+        if timed_out or exit_code == TIMEOUT_EXIT_CODE:
+            exit_code = TIMEOUT_EXIT_CODE
             self._notify_timeout(detected_type, command, label)
+            self._notify_timeout_summary(detected_type, command, label)
         else:
             self._notify_finish(detected_type, command, label)
 

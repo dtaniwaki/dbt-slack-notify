@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
 from helpers import SAMPLE_RUN_RESULTS, write_run_results
 
 from dbt_slack_notify.runner import (
@@ -16,7 +17,40 @@ from dbt_slack_notify.runner import (
     get_selected_models,
     get_selected_nodes,
     get_selected_nodes_by_resource_type,
+    parse_duration,
 )
+
+
+class TestParseDuration:
+    def test_seconds_bare(self) -> None:
+        assert parse_duration("3600") == 3600
+
+    def test_seconds_suffix(self) -> None:
+        assert parse_duration("30s") == 30
+
+    def test_minutes(self) -> None:
+        assert parse_duration("240m") == 14400
+
+    def test_hours(self) -> None:
+        assert parse_duration("4h") == 14400
+
+    def test_uppercase_suffix(self) -> None:
+        assert parse_duration("4H") == 14400
+
+    def test_whitespace(self) -> None:
+        assert parse_duration("  5m ") == 300
+
+    def test_empty(self) -> None:
+        with pytest.raises(ValueError):
+            parse_duration("")
+
+    def test_non_numeric(self) -> None:
+        with pytest.raises(ValueError):
+            parse_duration("abc")
+
+    def test_non_positive(self) -> None:
+        with pytest.raises(ValueError):
+            parse_duration("0")
 
 
 class TestDetectNotificationType:
@@ -412,3 +446,102 @@ class TestSlackNotifyingRunner:
         assert runner.channel == "#ch"
         assert runner.dbt_project_dir == "/proj"
         assert runner.dbt_target_path == "out"
+
+
+_GRACEFUL_SIGINT_SCRIPT = (
+    "import signal, sys, time\n"
+    "signal.signal(signal.SIGINT, lambda *a: sys.exit(0))\n"
+    "print('started', flush=True)\n"
+    "time.sleep(30)\n"
+)
+
+_IGNORE_SIGINT_SCRIPT = (
+    "import signal, time\n"
+    "signal.signal(signal.SIGINT, signal.SIG_IGN)\n"
+    "print('started', flush=True)\n"
+    "time.sleep(30)\n"
+)
+
+
+class TestSelfManagedTimeout:
+    @patch("dbt_slack_notify.runner.get_slack_client")
+    def test_timeout_normalizes_exit_code_and_posts_summary(
+        self, mock_get_client: MagicMock, tmp_path: Path,
+    ) -> None:
+        client = MagicMock()
+        client.chat_postMessage.return_value = {"ts": "123"}
+        mock_get_client.return_value = client
+
+        write_run_results(tmp_path / "run_results.json", SAMPLE_RUN_RESULTS)
+
+        state_file = tmp_path / "state.json"
+        runner = SlackNotifyingRunner(
+            state_file=state_file, slack_channel="#test",
+            dbt_project_dir=str(tmp_path), dbt_target_path=".",
+        )
+        exit_code = runner.run(
+            [sys.executable, "-c", _GRACEFUL_SIGINT_SCRIPT],
+            notification_type="dbt-run",
+            timeout=0.5,
+            kill_grace=5,
+        )
+        assert exit_code == 124
+
+        messages = [c.kwargs.get("text", "") for c in client.chat_postMessage.call_args_list]
+        assert any("タイムアウト" in m for m in messages)
+        assert any("results" in m for m in messages)
+
+    @patch("dbt_slack_notify.runner.get_slack_client")
+    def test_timeout_without_run_results_only_alarms(
+        self, mock_get_client: MagicMock, tmp_path: Path,
+    ) -> None:
+        client = MagicMock()
+        client.chat_postMessage.return_value = {"ts": "123"}
+        mock_get_client.return_value = client
+
+        state_file = tmp_path / "state.json"
+        runner = SlackNotifyingRunner(
+            state_file=state_file, slack_channel="#test",
+            dbt_project_dir=str(tmp_path), dbt_target_path=".",
+        )
+        exit_code = runner.run(
+            [sys.executable, "-c", _GRACEFUL_SIGINT_SCRIPT],
+            notification_type="dbt-run",
+            timeout=0.5,
+            kill_grace=5,
+        )
+        assert exit_code == 124
+
+        messages = [c.kwargs.get("text", "") for c in client.chat_postMessage.call_args_list]
+        assert any("タイムアウト" in m for m in messages)
+        assert not any("results" in m for m in messages)
+
+    @patch("dbt_slack_notify.runner.get_slack_client")
+    def test_timeout_sigkill_fallback_when_child_ignores_sigint(
+        self, mock_get_client: MagicMock, tmp_path: Path,
+    ) -> None:
+        mock_get_client.return_value = None
+
+        state_file = tmp_path / "state.json"
+        runner = SlackNotifyingRunner(
+            state_file=state_file,
+            dbt_project_dir=str(tmp_path), dbt_target_path=".",
+        )
+        exit_code = runner.run(
+            [sys.executable, "-c", _IGNORE_SIGINT_SCRIPT],
+            notification_type="dbt-run",
+            timeout=0.5,
+            kill_grace=0.5,
+        )
+        assert exit_code == 124
+
+    @patch("dbt_slack_notify.runner.get_slack_client")
+    def test_no_timeout_runs_to_completion(
+        self, mock_get_client: MagicMock, tmp_path: Path,
+    ) -> None:
+        mock_get_client.return_value = None
+
+        state_file = tmp_path / "state.json"
+        runner = SlackNotifyingRunner(state_file=state_file)
+        exit_code = runner.run([sys.executable, "-c", "print('ok')"], timeout=10)
+        assert exit_code == 0

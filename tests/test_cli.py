@@ -99,3 +99,34 @@ class TestCliSettingsIntegration:
         call_kwargs = mock_runner_cls.call_args[1]
         expected_dir = tempfile.gettempdir()
         assert str(call_kwargs["state_file"]).startswith(expected_dir)
+
+
+class TestCliTimeout:
+    @patch("dbt_slack_notify.cli.SlackNotifyingRunner")
+    def test_timeout_parsed_to_seconds(self, mock_runner_cls: pytest.fixture) -> None:
+        mock_runner = mock_runner_cls.return_value
+        mock_runner.run.return_value = 0
+
+        runner = CliRunner()
+        result = runner.invoke(cli, ["--timeout", "240m", "--kill-grace", "5m", "echo", "hi"])
+        assert result.exit_code == 0
+        run_kwargs = mock_runner.run.call_args[1]
+        assert run_kwargs["timeout"] == 14400
+        assert run_kwargs["kill_grace"] == 300
+
+    @patch("dbt_slack_notify.cli.SlackNotifyingRunner")
+    def test_default_timeout_is_none(self, mock_runner_cls: pytest.fixture) -> None:
+        mock_runner = mock_runner_cls.return_value
+        mock_runner.run.return_value = 0
+
+        runner = CliRunner()
+        result = runner.invoke(cli, ["echo", "hi"])
+        assert result.exit_code == 0
+        run_kwargs = mock_runner.run.call_args[1]
+        assert run_kwargs["timeout"] is None
+        assert run_kwargs["kill_grace"] == 300
+
+    def test_invalid_timeout(self) -> None:
+        runner = CliRunner()
+        result = runner.invoke(cli, ["--timeout", "abc", "echo", "hi"])
+        assert result.exit_code != 0
