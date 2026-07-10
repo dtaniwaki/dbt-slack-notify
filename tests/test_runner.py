@@ -353,6 +353,19 @@ class TestProgressTracker:
         assert tracker.feed("12:00:00  Done. PASS=10 WARN=0 ERROR=0") is None
         assert tracker.completed == 0
 
+    def test_ignores_hook_lines(self) -> None:
+        tracker = ProgressTracker(step_percent=25)
+        # on-run-start/end hook ("1 of 1 OK hook: ...") は model 完了数に数えない
+        assert tracker.feed("12:00:00  1 of 1 OK hook: elementary.on-run-start.0 [OK in 0.1s]") is None
+        assert tracker.completed == 0
+        # hook を挟んでも 4 model 中 3 完了 = 75%（hook を数えて 100% にならない）
+        tracker.feed(_dbt_line(1, 4))
+        tracker.feed(_dbt_line(2, 4))
+        update = tracker.feed(_dbt_line(3, 4))
+        assert update is not None
+        assert update["completed"] == 3
+        assert update["percent"] == 75
+
     def test_counts_errors_and_warns(self) -> None:
         tracker = ProgressTracker(step_percent=25)
         tracker.feed(_dbt_line(1, 4, status="ERROR"))

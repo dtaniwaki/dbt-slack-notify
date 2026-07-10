@@ -261,6 +261,10 @@ class ProgressTracker:
         match = self._LINE_RE.search(line)
         if not match:
             return None
+        # on-run-start/end hook 行 ("N of M OK hook: ...") は独立した "of 1" カウンタで
+        # model 進捗とは別物。数えると model 完了数を水増しして percent がずれるため除外する。
+        if line[match.end() :].lstrip().startswith("hook"):
+            return None
         _index, total_str, status = match.groups()
         self.total = max(self.total, int(total_str))
         if status == "START":
