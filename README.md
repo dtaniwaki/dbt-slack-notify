@@ -79,6 +79,8 @@ dbt-slack-notify --timeout 240m dbt build --selector daily
 
 On timeout the tool sends `SIGINT` to the command's process group (not `SIGTERM`), so dbt shuts down gracefully and flushes `run_results.json` for the nodes that finished — enabling a follow-up re-run of only the unfinished nodes. If the process is still alive after `--kill-grace` seconds it is force-killed with `SIGKILL`. When a timeout occurs the tool posts the timeout alarm and, if `run_results.json` is present, the usual result summary. The timed-out run exits with code `124`.
 
+An externally delivered `SIGTERM` or `SIGINT` (e.g. a CI system stopping the build) is forwarded to the child as `SIGINT` as well, so dbt flushes `run_results.json` before exiting; the wrapper then waits for the child and exits with its exit code.
+
 ### Progress updates
 
 Long-running commands can feel silent between the start and finish notifications. Pass `--progress-step` to post interim updates to the same thread as the run progresses:

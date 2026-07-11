@@ -495,6 +495,45 @@ class SlackNotifyingRunner:
         except subprocess.TimeoutExpired:
             logger.error("Process did not terminate after SIGKILL")
 
+    def _wait_forwarding_signals(
+        self,
+        proc: subprocess.Popen[str],
+        timeout: float | None,
+        kill_grace: float,
+    ) -> bool:
+        """Wait for the child, relaying an external SIGTERM/SIGINT to it as SIGINT.
+
+        On an external signal the child group is sent SIGINT (dbt flushes run_results) and the
+        parent keeps waiting so the child's exit code propagates. The ``--timeout`` escalation
+        stays intact until such a signal arrives.
+        """
+        forwarded = threading.Event()
+
+        def _handler(signum: int, _frame: Any) -> None:
+            logger.warning("Received signal %s; forwarding SIGINT to child (pid=%s)", signum, proc.pid)
+            self._signal_group(proc, signal.SIGINT)
+            forwarded.set()
+
+        previous = {
+            signal.SIGTERM: signal.signal(signal.SIGTERM, _handler),
+            signal.SIGINT: signal.signal(signal.SIGINT, _handler),
+        }
+        timed_out = False
+        try:
+            while True:
+                try:
+                    proc.wait(timeout=None if forwarded.is_set() else timeout)
+                    return timed_out
+                except subprocess.TimeoutExpired:
+                    if forwarded.is_set():
+                        continue
+                    timed_out = True
+                    self._terminate_timed_out(proc, kill_grace)
+                    return timed_out
+        finally:
+            for sig, handler in previous.items():
+                signal.signal(sig, handler)
+
     def run(
         self,
         command: list[str],
@@ -528,7 +567,7 @@ class SlackNotifyingRunner:
                 stderr=subprocess.STDOUT,
                 text=True,
                 bufsize=1,
-                start_new_session=timeout is not None,
+                start_new_session=True,
             )
             assert proc.stdout is not None
             reader = threading.Thread(
@@ -536,11 +575,7 @@ class SlackNotifyingRunner:
                 args=(proc.stdout, tail_lines, tracker, detected_type, label),
             )
             reader.start()
-            try:
-                proc.wait(timeout=timeout)
-            except subprocess.TimeoutExpired:
-                timed_out = True
-                self._terminate_timed_out(proc, kill_grace)
+            timed_out = self._wait_forwarding_signals(proc, timeout, kill_grace)
             reader.join()
             if timed_out:
                 exit_code = TIMEOUT_EXIT_CODE

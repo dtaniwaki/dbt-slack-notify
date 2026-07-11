@@ -1,8 +1,11 @@
 """Tests for dbt_slack_notify.runner."""
 
 import json
+import os
+import signal
 import subprocess
 import sys
+import threading
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -567,6 +570,32 @@ _IGNORE_SIGINT_SCRIPT = (
     "print('started', flush=True)\n"
     "time.sleep(30)\n"
 )
+
+
+class TestExternalSignalForwarding:
+    @patch("dbt_slack_notify.runner.get_slack_client")
+    def test_external_sigterm_forwarded_to_child_as_sigint(
+        self, mock_get_client: MagicMock, tmp_path: Path,
+    ) -> None:
+        mock_get_client.return_value = None
+
+        state_file = tmp_path / "state.json"
+        runner = SlackNotifyingRunner(
+            state_file=state_file,
+            dbt_project_dir=str(tmp_path), dbt_target_path=".",
+        )
+
+        timer = threading.Timer(0.5, lambda: os.kill(os.getpid(), signal.SIGTERM))
+        timer.start()
+        try:
+            exit_code = runner.run(
+                [sys.executable, "-c", _GRACEFUL_SIGINT_SCRIPT],
+                notification_type="dbt-run",
+            )
+        finally:
+            timer.cancel()
+
+        assert exit_code == 0
 
 
 class TestSelfManagedTimeout:
