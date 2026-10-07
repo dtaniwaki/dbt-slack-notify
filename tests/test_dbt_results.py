@@ -17,7 +17,19 @@ class TestParseRunResults:
         assert elapsed == 42.5
         assert len(errors) == 1
         assert errors[0].node_name == "broken"
+        assert errors[0].status == "error"
         assert bytes_scanned == 1024
+
+    def test_test_failure_status_is_kept(self, run_results_path: Path) -> None:
+        write_run_results(
+            run_results_path,
+            {
+                "elapsed_time": 1.0,
+                "results": [{"unique_id": "test.proj.not_null_x", "status": "fail", "message": "Got 1 result"}],
+            },
+        )
+        _, _, errors, _, _ = parse_run_results(run_results_path)
+        assert [(e.node_name, e.status) for e in errors] == [("not_null_x", "fail")]
 
     def test_missing_file(self, tmp_path: Path) -> None:
         missing = tmp_path / "missing.json"

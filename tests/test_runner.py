@@ -376,7 +376,8 @@ class TestProgressTracker:
         tracker.feed(_dbt_line(3, 4, status="WARN"))
         update = tracker.feed(_dbt_line(4, 4, status="OK"))
         assert update is not None
-        assert update["errors"] == 2
+        assert update["errors"] == 1
+        assert update["failures"] == 1
         assert update["warns"] == 1
 
     def test_min_nodes_suppresses_tiny_run(self) -> None:
@@ -460,6 +461,30 @@ class TestSlackNotifyingRunner:
         progress_messages = [m for m in messages if "進捗" in m]
         assert len(progress_messages) == 4
         assert "dbt run 進捗: 4/4件 (100%)" in progress_messages[-1]
+
+    @patch("dbt_slack_notify.runner.get_slack_client")
+    def test_progress_separates_errors_and_test_failures(
+        self, mock_get_client: MagicMock, tmp_path: Path, run_results_path: Path,
+    ) -> None:
+        client = MagicMock()
+        client.chat_postMessage.return_value = {"ts": "123"}
+        mock_get_client.return_value = client
+
+        write_run_results(tmp_path / "run_results.json", SAMPLE_RUN_RESULTS)
+
+        script = (
+            "print('12:00:01  1 of 2 ERROR creating model schema.a [ERROR in 1s]', flush=True)\n"
+            "print('12:00:02  2 of 2 FAIL 1 not_null_b [FAIL 1 in 1s]', flush=True)\n"
+        )
+        runner = SlackNotifyingRunner(
+            state_file=tmp_path / "state.json", slack_channel="#test",
+            dbt_project_dir=str(tmp_path), dbt_target_path=".",
+        )
+        runner.run([sys.executable, "-c", script], notification_type="dbt-run", progress_step=50)
+        messages = [c.kwargs.get("text", "") for c in client.chat_postMessage.call_args_list]
+        final = [m for m in messages if "進捗" in m][-1]
+        assert "実行エラー1件" in final
+        assert "テスト失敗1件" in final
 
     @patch("dbt_slack_notify.runner.get_slack_client")
     def test_run_without_slack(
