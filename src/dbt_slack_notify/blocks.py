@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from dbt_slack_notify.constants import MAX_ERROR_DETAILS, MAX_ERROR_MSG_LEN, ErrorEntry
+from dbt_slack_notify.constants import MAX_ERROR_DETAILS, MAX_ERROR_MSG_LEN, TEST_FAILURE_STATUS, ErrorEntry
 from dbt_slack_notify.formatters import format_bytes, format_duration, format_stats_table
 
 
@@ -18,10 +18,11 @@ def build_error_details_blocks(
 
     shown = errors[:max_errors]
     lines: list[str] = []
-    for node_name, message in shown:
+    for node_name, message, status in shown:
         truncated = message[:MAX_ERROR_MSG_LEN] + "..." if len(message) > MAX_ERROR_MSG_LEN else message
         safe_message = truncated.replace("```", "'''")
-        lines.append(f"\u274c *{node_name}*\n```{safe_message}```")
+        emoji = "\U0001f9ea" if status == TEST_FAILURE_STATUS else "\u274c"
+        lines.append(f"{emoji} *{node_name}*\n```{safe_message}```")
     text = "\n".join(lines)
     if len(errors) > max_errors:
         remaining = len(errors) - max_errors

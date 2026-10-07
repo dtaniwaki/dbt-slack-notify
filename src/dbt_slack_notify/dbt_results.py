@@ -45,7 +45,7 @@ def parse_run_results(
             parts = unique_id.split(".")
             node_name = ".".join(parts[2:]) if len(parts) > 2 else unique_id
             message = result.get("message") or ""
-            errors.append(ErrorEntry(node_name, message))
+            errors.append(ErrorEntry(node_name, message, status))
 
         adapter_response = result.get("adapter_response") or {}
         bytes_scanned += int(adapter_response.get("data_scanned_in_bytes") or 0)

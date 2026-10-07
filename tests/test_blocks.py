@@ -48,6 +48,12 @@ class TestBuildStatsBlocks:
         text = blocks[0]["text"]["text"]  # type: ignore[index]
         assert "scanned 0 B" in text
 
+    def test_test_failure_uses_distinct_emoji(self) -> None:
+        blocks = build_error_details_blocks([ErrorEntry("t", "boom", "fail"), ErrorEntry("m", "boom", "error")])
+        text = blocks[0]["text"]["text"]  # type: ignore[index]
+        assert "\U0001f9ea *t*" in text
+        assert "\u274c *m*" in text
+
     def test_with_errors(self) -> None:
         counts = {"model": {"error": 1}}
         errors = [ErrorEntry("broken", "fail msg")]

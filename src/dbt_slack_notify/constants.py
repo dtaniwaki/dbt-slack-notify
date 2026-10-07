@@ -12,10 +12,15 @@ MAX_ERROR_MSG_LEN = 300
 class ErrorEntry(NamedTuple):
     node_name: str
     message: str
+    status: str = "error"
 
 STATUS_ORDER: list[str] = ["runtime error", "error", "fail", "warn", "skip", "skipped", "success", "pass"]
 
-ERROR_STATUSES: frozenset[str] = frozenset({"error", "fail", "runtime error"})
+EXECUTION_ERROR_STATUSES: frozenset[str] = frozenset({"error", "runtime error"})
+
+TEST_FAILURE_STATUS = "fail"
+
+ERROR_STATUSES: frozenset[str] = EXECUTION_ERROR_STATUSES | {TEST_FAILURE_STATUS}
 
 LOG_LEVELS: dict[str, int] = {
     "DEBUG": logging.DEBUG,

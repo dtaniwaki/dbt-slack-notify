@@ -236,7 +236,8 @@ class ProgressTracker:
     """
 
     _LINE_RE = re.compile(r"\b(\d+) of (\d+) ([A-Z][A-Z-]*)\b")
-    _ERROR_STATUSES = frozenset({"ERROR", "FAIL"})
+    _ERROR_STATUSES = frozenset({"ERROR"})
+    _FAILURE_STATUSES = frozenset({"FAIL"})
 
     def __init__(
         self,
@@ -252,6 +253,7 @@ class ProgressTracker:
         self.total = 0
         self.completed = 0
         self.errors = 0
+        self.failures = 0
         self.warns = 0
         self._last_percent = 0
         self._last_completed = 0
@@ -272,6 +274,8 @@ class ProgressTracker:
         self.completed += 1
         if status in self._ERROR_STATUSES:
             self.errors += 1
+        elif status in self._FAILURE_STATUSES:
+            self.failures += 1
         elif status == "WARN":
             self.warns += 1
         if self.total <= 0:
@@ -292,6 +296,7 @@ class ProgressTracker:
             "total": self.total,
             "percent": percent,
             "errors": self.errors,
+            "failures": self.failures,
             "warns": self.warns,
         }
 
@@ -447,7 +452,9 @@ class SlackNotifyingRunner:
         base = TYPE_LABELS.get(notification_type or "", "実行")
         text = f"{base} 進捗: {update['completed']}/{update['total']}件 ({update['percent']}%)"
         if update["errors"]:
-            text += f" — :warning: エラー{update['errors']}件"
+            text += f" — :x: 実行エラー{update['errors']}件"
+        if update["failures"]:
+            text += f" — :test_tube: テスト失敗{update['failures']}件"
         text += self._build_label_suffix(label)
         try:
             cmd_message(self.client, self.channel, self.state_file, text)
